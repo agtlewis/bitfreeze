@@ -10,13 +10,13 @@ BitFreeze is a powerful, intelligent backup system that creates version based ba
 ## 🚀 Key Features
 
 ### 🔄 Content-Based Deduplication
-- **Smart Storage**: Only unique file contents are stored in the archive
-- **Efficient Space Usage**: Moving or reorganizing files doesn't increase archive size
+- **Smart Storage**: Moving or reorganizing files doesn't increase archive size
+- **Efficient Space Usage**: Only unique file contents are stored in the archive
 - **MD5 Hash Verification**: Ensures data integrity and prevents corruption
 
 ### 🛡️ Enterprise-Grade Security
 - **AES-256 Encryption**: Strong encryption with password protection
-- **Recovery Records**: 10% (configurable) recovery records for bitrot protection
+- **Recovery Records**: 6% (configurable) recovery records for bitrot protection
 - **Built-in Repair**: Automatic repair capabilities for damaged archives
 
 ### 📊 Version Control & Management
@@ -27,9 +27,12 @@ BitFreeze is a powerful, intelligent backup system that creates version based ba
 
 ### 🔧 Advanced Operations
 - **List Snapshots**: View all available backup versions
-- **Restore Capabilities**: Restore specific snapshots to any location
+- **Restore Capabilities**: Restore specific snapshots to any location with full metadata preservation
 - **Archive Repair**: Built-in repair for damaged archives
-- **Password Management**: Environment variable support for secure password handling
+- **Password Protection**: AES-256 encryption with command-line password support
+- **Metadata Preservation**: File permissions, ownership, timestamps, and attributes are preserved
+- **Symbolic Link Support**: Handles symlinks with configurable behavior
+- **Sudo Integration**: Automatic privilege escalation for protected files
 
 ## 📋 Requirements
 
@@ -101,24 +104,6 @@ php bitfreeze.php store /home/user/documents archive.rar "Daily Snapshot"
 php bitfreeze.php store /var/www/website archive.rar "Website Snapshot" -p securepass
 ```
 
-#### Using Environment Variable for Password
-```bash
-export RAR_PASSWORD="securepass"
-php bitfreeze.php store /important/data archive.rar "Secure Backup" -p
-```
-
-### Managing Passwords
-
-#### Set Password Environment Variable
-```bash
-php bitfreeze.php passwd
-```
-
-#### Clear Password Environment Variable
-```bash
-php bitfreeze.php passwd -c
-```
-
 ### Listing Snapshots
 
 ```bash
@@ -158,6 +143,35 @@ php bitfreeze.php diff 1 4 archive.rar
 # - Summary statistics
 ```
 
+### Metadata Preservation
+
+BitFreeze preserves complete file metadata during backup and restoration:
+
+- **File Permissions**: Unix permissions (read/write/execute) are preserved
+- **Ownership**: User and group ownership information is maintained
+- **Timestamps**: Access time, modification time, and creation time are preserved
+- **Symbolic Links**: Symlink targets and attributes are maintained
+- **Extended Attributes**: File attributes and extended metadata are preserved
+
+### Symbolic Link Support
+
+```bash
+# Default behavior: Store symlinks as links (not their targets)
+php bitfreeze.php store /path/with/symlinks archive.rar "Snapshot"
+
+# Follow symlinks and backup their contents
+php bitfreeze.php store /path/with/symlinks archive.rar "Snapshot" --follow-symlinks
+```
+
+### Sudo Integration
+
+BitFreeze automatically detects when elevated privileges are needed:
+
+- **Automatic Detection**: Scans for permission issues before backup
+- **Sudo Prompt**: Prompts for sudo password when needed
+- **Privileged Access**: Uses sudo to access protected files and directories
+- **Secure Handling**: Password is handled securely and not stored
+
 ### Repairing Archives
 
 ```bash
@@ -193,10 +207,13 @@ archive.rar/
 
 ### Recovery and Safety Features
 
-- **10% Recovery Records**: Protect against bitrot and corruption
+- **6% Recovery Records**: Protect against bitrot and corruption
 - **Built-in Repair**: RAR's repair command can recover damaged archives
 - **Password Protection**: AES-256 encryption secures sensitive backups
 - **Automatic Integrity Checking**: Verifies data during operations
+- **Metadata Preservation**: Complete file attributes and permissions are maintained
+- **Privilege Escalation**: Automatic sudo integration for protected files
+- **Symbolic Link Handling**: Configurable symlink behavior with `--follow-symlinks`
 
 ## 📊 Benefits Over Traditional Backup Systems
 
@@ -209,6 +226,8 @@ archive.rar/
 | **Encryption** | Often separate | Built-in AES-256 |
 | **Deduplication** | None | Content Aware |
 | **Corruption Protection** | Limited | Robust Recovery Records |
+| **Metadata Preservation** | Limited | Complete File Attributes |
+| **Privilege Handling** | Manual | Automatic Sudo Integration |
 
 ## 🔍 Use Cases
 
@@ -249,12 +268,8 @@ php bitfreeze.php store /home archive.rar "User data snapshot"
 The recovery record size is configurable in the script:
 
 ```php
-define('RECOVERY_RECORD_SIZE', 10); // Set as a percentage
+define('RECOVERY_RECORD_SIZE', 6); // Set as a percentage
 ```
-
-### Environment Variables
-
-- `RAR_PASSWORD`: Set password for all operations
 
 ## 🔧 Troubleshooting
 
@@ -290,12 +305,24 @@ php bitfreeze.php repair archive.rar
 rar t archive.rar
 ```
 
+#### Permission Issues
+```bash
+# BitFreeze will automatically prompt for sudo when needed
+# For manual permission checks:
+ls -la /path/to/backup/directory
+
+# Check if files are readable
+find /path/to/backup -type f -exec test -r {} \; -print
+```
+
 ### Performance Tips
 
 1. **Use SSD Storage**: Faster read/write operations
 2. **Adequate RAM**: Large files benefit from more memory
 3. **Network Storage**: Consider network-attached storage for large archives
 4. **Regular Maintenance**: Periodically verify archive integrity
+5. **Sudo Caching**: Use `sudo -n` or configure sudoers for passwordless sudo
+6. **Symlink Strategy**: Use `--follow-symlinks` only when necessary to avoid duplicates
 
 ## 📈 Performance Characteristics
 
