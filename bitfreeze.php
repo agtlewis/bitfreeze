@@ -302,6 +302,14 @@ function get_file_metadata($filepath, $sudo_password = null) {
         $group_id = $group_result;
     }
     
+    // If we got stat data via sudo, use that instead of trying to get permissions/owner/group
+    // since the current user might not have access to those functions
+    if (isset($stat['mode'])) {
+        $permissions = substr(sprintf('%o', $stat['mode']), -4);
+        $owner_id = $stat['uid'];
+        $group_id = $stat['gid'];
+    }
+    
     // Try to get names, fallback to IDs
     $owner = $owner_id;
     $group = $group_id;
