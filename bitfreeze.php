@@ -900,6 +900,21 @@ switch ($cmd) {
         if (count($cleaned_argv) < 4 || count($cleaned_argv) > 6) usage();
         $comment = count($cleaned_argv) >= 5 ? $cleaned_argv[4] : "Automated Snapshot";
         $password = get_password();
+        // For store command, if -p was used without value, prompt for encryption password
+        if ($password === null) {
+            global $argv;
+            for ($i = 1; $i < count($argv); $i++) {
+                if ($argv[$i] === '-p') {
+                    // If -p is followed by a value, password was already returned
+                    if (isset($argv[$i + 1]) && $argv[$i + 1][0] !== '-') {
+                        break;
+                    }
+                    // If -p is provided without a value, prompt for encryption password
+                    $password = prompt_for_encryption_password();
+                    break;
+                }
+            }
+        }
         store($cleaned_argv[2], $cleaned_argv[3], $comment, $password);
         break;
     case 'list':
