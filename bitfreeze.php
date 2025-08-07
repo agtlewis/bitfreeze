@@ -47,6 +47,139 @@
  */
 
 /**
+ * Terminal color and formatting functions
+ * 
+ * Provides ANSI color codes and formatting utilities for beautiful output
+ */
+
+// ANSI color codes
+define('COLOR_RESET', "\033[0m");
+define('COLOR_BOLD', "\033[1m");
+define('COLOR_DIM', "\033[2m");
+define('COLOR_UNDERLINE', "\033[4m");
+
+// Foreground colors
+define('COLOR_BLACK', "\033[30m");
+define('COLOR_RED', "\033[31m");
+define('COLOR_GREEN', "\033[32m");
+define('COLOR_YELLOW', "\033[33m");
+define('COLOR_BLUE', "\033[34m");
+define('COLOR_MAGENTA', "\033[35m");
+define('COLOR_CYAN', "\033[36m");
+define('COLOR_WHITE', "\033[37m");
+
+// Background colors
+define('COLOR_BG_BLACK', "\033[40m");
+define('COLOR_BG_RED', "\033[41m");
+define('COLOR_BG_GREEN', "\033[42m");
+define('COLOR_BG_YELLOW', "\033[43m");
+define('COLOR_BG_BLUE', "\033[44m");
+define('COLOR_BG_MAGENTA', "\033[45m");
+define('COLOR_BG_CYAN', "\033[46m");
+define('COLOR_BG_WHITE', "\033[47m");
+
+/**
+ * Check if terminal supports colors
+ * 
+ * @return bool True if colors are supported
+ */
+function supports_colors() {
+    return function_exists('posix_isatty') && posix_isatty(STDOUT);
+}
+
+/**
+ * Apply color to text if colors are supported
+ * 
+ * @param string $text Text to colorize
+ * @param string $color ANSI color code
+ * @return string Colored text or original text
+ */
+function colorize($text, $color) {
+    return supports_colors() ? $color . $text . COLOR_RESET : $text;
+}
+
+/**
+ * Print a formatted table row
+ * 
+ * @param array $columns Array of column values
+ * @param array $widths Array of column widths
+ * @param string $separator Column separator
+ * @return void
+ */
+function print_table_row($columns, $widths, $separator = '  ') {
+    $row = '';
+    foreach ($columns as $i => $column) {
+        $width = $widths[$i] ?? 20;
+        $row .= str_pad($column, $width) . $separator;
+    }
+    echo $row . "\n";
+}
+
+/**
+ * Print a header with styling
+ * 
+ * @param string $text Header text
+ * @param string $char Character to use for underline
+ * @param int $width Width of the header
+ * @return void
+ */
+function print_header($text, $char = '=', $width = 60) {
+    $text_length = strlen($text) + 4; // '  ' before and after
+    $line_length = max($width, $text_length);
+    $line = str_repeat($char, $line_length);
+
+    // Center the text within $line_length
+    $padding = $line_length - strlen($text);
+    $left = floor($padding / 2);
+    $right = $padding - $left;
+    $centered_text = str_repeat(' ', $left - 1) . $text . str_repeat(' ', $right - 1);
+
+    echo "\n" . colorize($line, COLOR_CYAN) . "\n";
+    echo colorize($centered_text, COLOR_BOLD . COLOR_CYAN) . "\n";
+    echo colorize($line, COLOR_CYAN) . "\n\n";
+}
+
+/**
+ * Print a success message
+ * 
+ * @param string $message Success message
+ * @return void
+ */
+function print_success($message) {
+    echo colorize("  $message", COLOR_GREEN) . "\n";
+}
+
+/**
+ * Print a warning message
+ * 
+ * @param string $message Warning message
+ * @return void
+ */
+function print_warning($message) {
+    echo colorize("  $message", COLOR_YELLOW) . "\n";
+}
+
+/**
+ * Print an error message
+ * 
+ * @param string $message Error message
+ * @return void
+ */
+function print_error($message) {
+    echo colorize("  $message", COLOR_RED) . "\n";
+}
+
+/**
+ * Print an info message
+ * 
+ * @param string $message Info message
+ * @return void
+ */
+function print_info($message) {
+    echo colorize("  $message", COLOR_CYAN) . "\n";
+}
+
+/**
  * Redundant information (recovery record) may be added to RAR archive. While it increases the archive 
  * size, it helps to recover archived files in case of disk failure or data loss of other kind, provided that damage
  *  is not too severe. Such damage recovery can be done with command "r". ZIP archive format does not support 
@@ -200,10 +333,46 @@ function check_required_functions() {
 } check_required_functions();
 
 /**
+ * Format file size with appropriate units
+ * 
+ * Converts bytes to human-readable format with appropriate units
+ * (Bytes, KiloBytes, MegaBytes, GigaBytes, TeraBytes, PetaBytes) based on the size.
+ * Uses number formatting and long unit names.
+ * 
+ * @param int $bytes Size in bytes
+ * @param int $precision Number of decimal places (default: 2)
+ * @return string Formatted size string
+ */
+function format_file_size($bytes, $precision = 2) {
+    $units = ['Bytes', 'KiloBytes', 'MegaBytes', 'GigaBytes', 'TeraBytes', 'PetaBytes'];
+    $thresholds = [1024, 1024*1024, 1024*1024*1024, 1024*1024*1024*1024, 1024*1024*1024*1024*1024];
+    
+    // For very small sizes, just show bytes
+    if ($bytes < 2000) {
+        return number_format($bytes) . ' Bytes';
+    }
+    
+    // Find the appropriate unit
+    $unit_index = 0;
+    $size = $bytes;
+    
+    for ($i = 0; $i < count($thresholds); $i++) {
+        if ($bytes >= $thresholds[$i]) {
+            $size = $bytes / $thresholds[$i];
+            $unit_index = $i + 1;
+        } else {
+            break;
+        }
+    }
+    
+    return number_format($size, $precision) . ' ' . $units[$unit_index];
+}
+
+/**
  * Get file metadata for manifest entry
  * 
  * Collects all relevant file metadata including permissions, ownership,
- * and timestamps. Returns data in a format suitable for manifest storage.
+ * timestamps, and filesize. Returns data in a format suitable for manifest storage.
  * 
  * @param string $filepath Full path to the file
  * @return array Array containing metadata fields
@@ -227,7 +396,8 @@ function get_file_metadata($filepath, $sudo_password = null) {
                     'group' => 'unknown',
                     'mtime' => time(),
                     'atime' => time(),
-                    'ctime' => time()
+                    'ctime' => time(),
+                    'size' => 0
                 ];
             }
         } else {
@@ -239,7 +409,8 @@ function get_file_metadata($filepath, $sudo_password = null) {
                 'group' => 'unknown',
                 'mtime' => time(),
                 'atime' => time(),
-                'ctime' => time()
+                'ctime' => time(),
+                'size' => 0
             ];
         }
     }
@@ -249,20 +420,21 @@ function get_file_metadata($filepath, $sudo_password = null) {
         // If sudo is available, try to get stat with sudo
         if ($sudo_password !== null) {
             $escaped_filepath = escapeshellarg($filepath);
-            $command = "stat -c '%a %u %g %Y %X %Z' $escaped_filepath";
+            $command = "stat -c '%a %u %g %Y %X %Z %s' $escaped_filepath";
             
             $output = [];
             exec("timeout 600 printf '%s\n' " . escapeshellarg($sudo_password) . " | sudo -p '' -S $command 2>/dev/null", $output, $code);
             if ($code === 0 && !empty($output[0])) {
                 $parts = explode(' ', trim($output[0]));
-                if (count($parts) >= 6) {
+                if (count($parts) >= 7) {
                     $stat = [
                         'mode' => octdec($parts[0]),
                         'uid' => (int)$parts[1],
                         'gid' => (int)$parts[2],
                         'mtime' => (int)$parts[3],
                         'atime' => (int)$parts[4],
-                        'ctime' => (int)$parts[5]
+                        'ctime' => (int)$parts[5],
+                        'size' => (int)$parts[6]
                     ];
                 }
             }
@@ -276,7 +448,8 @@ function get_file_metadata($filepath, $sudo_password = null) {
                 'group' => 'unknown',
                 'mtime' => time(),
                 'atime' => time(),
-                'ctime' => time()
+                'ctime' => time(),
+                'size' => 0
             ];
         }
     }
@@ -334,7 +507,8 @@ function get_file_metadata($filepath, $sudo_password = null) {
         'group' => $group,
         'mtime' => $stat['mtime'],
         'atime' => $stat['atime'],
-        'ctime' => $stat['ctime']
+        'ctime' => $stat['ctime'],
+        'size' => $stat['size']
     ];
 }
 
@@ -342,7 +516,7 @@ function get_file_metadata($filepath, $sudo_password = null) {
  * Create enhanced manifest entry with metadata
  * 
  * Creates a manifest entry that includes file metadata alongside
- * the path and hash. Format: path\thash\tpermissions\towner\tgroup\tmtime\tatime\tctime
+ * the path and hash. Format: path\thash\tpermissions\towner\tgroup\tmtime\tatime\tctime\tsize
  * 
  * @param string $path Relative path to the file
  * @param string $hash MD5 hash of the file
@@ -360,7 +534,8 @@ function create_manifest_entry($path, $hash, $fullpath, $sudo_password = null) {
         $metadata['group'],
         $metadata['mtime'],
         $metadata['atime'],
-        $metadata['ctime']
+        $metadata['ctime'],
+        $metadata['size']
     ]);
 }
 
@@ -368,7 +543,7 @@ function create_manifest_entry($path, $hash, $fullpath, $sudo_password = null) {
  * Create directory manifest entry
  * 
  * Creates a manifest entry for directories with metadata.
- * Format: path\t[DIR]\tpermissions\towner\tgroup\tmtime\tatime\tctime
+ * Format: path\t[DIR]\tpermissions\towner\tgroup\tmtime\tatime\tctime\tsize
  * 
  * @param string $path Relative path to the directory
  * @param string $fullpath Full path to the directory for metadata collection
@@ -385,7 +560,8 @@ function create_directory_entry($path, $fullpath, $sudo_password = null) {
         $metadata['group'],
         $metadata['mtime'],
         $metadata['atime'],
-        $metadata['ctime']
+        $metadata['ctime'],
+        $metadata['size']
     ]);
 }
 
@@ -416,15 +592,16 @@ function parse_manifest_entry($line) {
         'hash' => $parts[1]
     ];
     
-    // Check if this is the new format with metadata (8 parts)
-    if (count($parts) >= 8) {
+    // Check if this is the new format with metadata (9 parts including size)
+    if (count($parts) >= 9) {
         $entry['metadata'] = [
             'permissions' => $parts[2],
             'owner' => $parts[3],
             'group' => $parts[4],
             'mtime' => (int)$parts[5],
             'atime' => (int)$parts[6],
-            'ctime' => (int)$parts[7]
+            'ctime' => (int)$parts[7],
+            'size' => (int)$parts[8]
         ];
     }
     
@@ -816,7 +993,7 @@ function has_follow_symlinks() {
  * Create symlink manifest entry
  * 
  * Creates a manifest entry for symbolic links with metadata.
- * Format: path\t[LINK]\ttarget\tpermissions\towner\tgroup\tmtime\tatime\tctime
+ * Format: path\t[LINK]\ttarget\tpermissions\towner\tgroup\tmtime\tatime\tctime\tsize
  * 
  * @param string $path Relative path to the symlink
  * @param string $fullpath Full path to the symlink for metadata collection
@@ -835,7 +1012,8 @@ function create_symlink_entry($path, $fullpath, $sudo_password = null) {
         $metadata['group'],
         $metadata['mtime'],
         $metadata['atime'],
-        $metadata['ctime']
+        $metadata['ctime'],
+        $metadata['size']
     ]);
 }
 
@@ -850,7 +1028,7 @@ function create_symlink_entry($path, $fullpath, $sudo_password = null) {
 function parse_symlink_entry($line) {
     $parts = explode("\t", $line);
     
-    if (count($parts) < 9) {
+    if (count($parts) < 10) {
         return false;
     }
     
@@ -860,15 +1038,16 @@ function parse_symlink_entry($line) {
         'target' => $parts[2]
     ];
     
-    // Check if this is the new format with metadata (9+ parts)
-    if (count($parts) >= 9) {
+    // Check if this is the new format with metadata (10+ parts including size)
+    if (count($parts) >= 10) {
         $entry['metadata'] = [
             'permissions' => $parts[3],
             'owner' => $parts[4],
             'group' => $parts[5],
             'mtime' => (int)$parts[6],
             'atime' => (int)$parts[7],
-            'ctime' => (int)$parts[8]
+            'ctime' => (int)$parts[8],
+            'size' => (int)$parts[9]
         ];
     }
     
@@ -1066,7 +1245,7 @@ function store($folder, $rarfile, $comment, $password = null) {
     mkdir($tmp_files, 0700, true);
     mkdir($tmp_versions, 0700, true);
 
-    echo "Scanning files in '$folder'...\n";
+    //echo "Scanning files in '$folder'...\n";
 
     // Check if sudo permissions will be needed early
     $sudo_password = null;
@@ -1090,10 +1269,16 @@ function store($folder, $rarfile, $comment, $password = null) {
     $skipped_files      = []; // Track which files were skipped
     $skipped_reasons    = []; // Track why files were skipped
     $parent_dirs        = [];
-
-    $symlink_count = 0;
-    $follow_symlinks = has_follow_symlinks();
+    $total_size         = 0; // Track total size of all files processed
+    $symlink_count      = 0;
+    $follow_symlinks    = has_follow_symlinks();
     
+    // Get archive size before backup for comparison
+    $archive_size_before = get_archive_size($rarfile_abs);
+    
+    echo "\n";
+    print_info("🔍 Scanning and calculating hashes. [$folder]");
+
     // Use sudo scan if needed, otherwise use normal generator
     if ($use_sudo_scan) {
         $sudo_scan_result   = sudo_scan_directory($folder, $sudo_password);
@@ -1107,7 +1292,7 @@ function store($folder, $rarfile, $comment, $password = null) {
             
             // Show progress every 10 files
             if ($file_count % 10 === 0 && $file_count > 0) {
-                echo "\r  Processed $file_count files...";
+                echo "\r" . colorize("  📁 Processed " . number_format($file_count) . " files...", COLOR_CYAN);
             }
 
             // For sudo scan, treat all files as regular files (skip symlink checks)
@@ -1128,6 +1313,10 @@ function store($folder, $rarfile, $comment, $password = null) {
                 $skipped_reasons[$rel] = "MD5 calculation failed";
                 continue;
             }
+            
+            // Get file size for tracking
+            $file_size = get_file_metadata($fullpath, $sudo_password)['size'];
+            $total_size += $file_size;
             
             $manifest[] = create_manifest_entry($rel, $md5, $fullpath, $sudo_password);
 
@@ -1152,11 +1341,11 @@ function store($folder, $rarfile, $comment, $password = null) {
             $processed_count++;
 
             if ($file_count % 10 === 0) {
-                echo "\r  Processed $file_count files...";
+                echo "\r" . colorize("  📁 Processed " . number_format($file_count) . " files...", COLOR_CYAN);
             }
         }
 
-        echo "\r  Processed $file_count files...";
+        echo "\r" . colorize("  📁 Processed " . number_format($file_count) . " files...", COLOR_CYAN);
     } else {
         // Use normal generator scan
         $processed_count = 0;
@@ -1197,6 +1386,10 @@ function store($folder, $rarfile, $comment, $password = null) {
                                     $skipped_reasons[$target_rel] = "Symlink target MD5 calculation failed";
                                     continue;
                                 }
+                                
+                                // Get file size for tracking
+                                $file_size = get_file_metadata($real_target, $sudo_password)['size'];
+                                $total_size += $file_size;
                                 
                                 $manifest[] = create_manifest_entry($target_rel, $md5, $real_target, $sudo_password);
                                 
@@ -1244,6 +1437,10 @@ function store($folder, $rarfile, $comment, $password = null) {
                     continue;
                 }
                 
+                // Get file size for tracking
+                $file_size = get_file_metadata($fullpath, $sudo_password)['size'];
+                $total_size += $file_size;
+                
                 $manifest[] = create_manifest_entry($rel, $md5, $fullpath, $sudo_password);
 
                 if (isset($seen_hashes[$md5])) {
@@ -1267,13 +1464,13 @@ function store($folder, $rarfile, $comment, $password = null) {
                 $processed_count++;
 
                 if ($file_count % 10 === 0) {
-                    echo "\r  Processed $file_count files...";
+                    echo "\r" . colorize("  📁 Processed " . number_format($file_count) . " files...", COLOR_CYAN);
                 }
             
             }
         }
 
-        echo "\r  Processed $file_count files...";
+        echo "\r" . colorize("  📁 Processed " . number_format($file_count) . " files...", COLOR_CYAN);
     }
 
     // Second pass: capture ALL directories with their metadata
@@ -1313,28 +1510,39 @@ function store($folder, $rarfile, $comment, $password = null) {
         echo "\n";
     }
 
-    echo "Scan complete.\n";
-    echo "Total files scanned:          " . number_format($file_count) . "\n";
-    echo "Unique new files to add:      " . number_format($add_count) . "\n";
-    echo "Duplicate files:              " . number_format($already_count) . "\n";
-    echo "Files skipped (permissions):  " . number_format($skipped_count) . "\n";
-    if ($skipped_count > 0) {
-        echo "Skipped files:\n";
-        foreach (array_slice($skipped_files, 0, 10) as $skipped_file) {
-            $reason = $skipped_reasons[$skipped_file] ?? "Unknown reason";
-            echo "  - $skipped_file ($reason)\n";
-        }
-        if (count($skipped_files) > 10) {
-            echo "  ... and " . (count($skipped_files) - 10) . " more\n";
-        }
-    }
-    echo "Directories to record:        " . number_format(count($all_dirs)) . "\n";
+    print_success("✅ Scan complete!");
+    
+    // Display scan results in a table
+    print_header("SCAN RESULTS");
+    
+    $scan_data = [
+        ['Files Scanned', number_format($file_count)],
+        ['Unique Files to Add', number_format($add_count)],
+        ['Duplicate Files', number_format($already_count)],
+        ['Skipped Files', number_format($skipped_count)],
+        ['Directories Included', number_format(count($all_dirs))],
+        ['Total Size', format_file_size($total_size)]
+    ];
     
     if ($symlink_count > 0) {
-        if ($follow_symlinks) {
-            echo "Symbolic links detected:    " . number_format($symlink_count) . " (followed and backed up)\n";
-        } else {
-            echo "Symbolic links detected:    " . number_format($symlink_count) . " (stored as links)\n";
+        $symlink_text = $follow_symlinks ? "followed" : "stored as links";
+        $scan_data[] = ['Symbolic Links', number_format($symlink_count) . " ($symlink_text)"];
+    }
+    
+    $widths = [25, 20];
+    foreach ($scan_data as $row) {
+        print_table_row($row, $widths);
+    }
+    
+    if ($skipped_count > 0) {
+        echo "\n";
+        print_warning("⚠️  Some files were skipped due to permission issues:");
+        foreach (array_slice($skipped_files, 0, 5) as $skipped_file) {
+            $reason = $skipped_reasons[$skipped_file] ?? "Unknown reason";
+            echo colorize("    • $skipped_file ($reason)", COLOR_YELLOW) . "\n";
+        }
+        if (count($skipped_files) > 5) {
+            echo colorize("    ... and " . (count($skipped_files) - 5) . " more", COLOR_YELLOW) . "\n";
         }
     }
 
@@ -1373,9 +1581,6 @@ function store($folder, $rarfile, $comment, $password = null) {
     // Generate README.txt at archive root
     file_put_contents("$temp/README.txt", README_TEXT);
 
-    // Add files, manifest, comment, script, README to archive
-    echo "Recording new data to archive...\n";
-    
     $cwd = getcwd();
     chdir($temp);
     $rar_cmd = 'rar a -r -rr' . RECOVERY_RECORD_SIZE . '% -m3';
@@ -1386,48 +1591,91 @@ function store($folder, $rarfile, $comment, $password = null) {
 
     $rar_cmd .= ' ' . escapeshellarg($rarfile_abs) . ' files versions bitfreeze.php README.txt';
 
-    passthru($rar_cmd);
+    // Count files to be archived for progress tracking
+    $files_to_archive = count_files_to_archive($temp);
+
+    print_header("WRITING DATA");
+    
+    // Execute RAR with progress tracking
+    $rar_success = execute_rar_with_progress($rar_cmd, $files_to_archive);
     chdir($cwd);
+
+    if (!$rar_success) {
+        print_error("❌ Failed to create archive!");
+        exec('rm -rf ' . escapeshellarg($temp));
+        exit(1);
+    }
 
     // Clean up temp
     exec('rm -rf ' . escapeshellarg($temp));
 
     $duration = round(microtime(true) - $start, 2);
 
-    echo "Backup complete.\n";
-    echo "Snapshot: $manifest_filename\n";
-    echo "Comment:  $comment\n";
+    // Get archive size after backup for comparison
+    $archive_size_after = get_archive_size($rarfile_abs);
+    $compression_stats = calculate_compression_stats($total_size, $archive_size_after);
 
-    if ($password) {
-        echo "Password protection: Enabled\n";
-    }
-
-    echo "Time taken: {$duration} sec\n";
-
-    echo "===== SUMMARY =====\n";
-    echo "  Total files scanned:    " . number_format($file_count) . "\n";
-    echo "  Unique files added:     " . number_format($add_count) . "\n";
-    echo "  Already present:        " . number_format($already_count) . "\n";
-    echo "  Files skipped:          " . number_format($skipped_count) . " (permission issues)\n";
-    if ($skipped_count > 0) {
-        echo "  Skipped files:\n";
-        foreach (array_slice($skipped_files, 0, 10) as $skipped_file) {
-            $reason = $skipped_reasons[$skipped_file] ?? "Unknown reason";
-            echo "    - $skipped_file ($reason)\n";
-        }
-        if (count($skipped_files) > 10) {
-            echo "  ... and " . (count($skipped_files) - 10) . " more\n";
-        }
-    }
-    echo "  Snapshot manifest:      $manifest_filename\n";
-    echo "  Comment Filename:       $comment_filename\n";
-    echo "  Directories recorded:   " . number_format(count($all_dirs)) . "\n";
+    //print_success("🎉 Backup complete!");
+    
+    // Display backup summary
+    print_header("BACKUP SUMMARY");
+    
+    $summary_data = [
+        ['Snapshot', $manifest_filename],
+        ['Comment', $comment],
+        ['Duration', format_duration($duration)],
+        ['Files Scanned', number_format($file_count)],
+        ['Total Size', format_file_size($total_size)],
+        ['Unique Files Added', number_format($add_count)],
+        ['Already Present', number_format($already_count)],
+        ['Files Skipped', number_format($skipped_count)],
+        ['Directories Recorded', number_format(count($all_dirs))]
+    ];
+    
     if ($symlink_count > 0) {
-        if ($follow_symlinks) {
-            echo "  Symbolic links:          " . number_format($symlink_count) . " (followed)\n";
-        } else {
-            echo "  Symbolic links:          " . number_format($symlink_count) . " (stored as links)\n";
-            echo "  Note: Use --follow-symlinks to backup symlink contents instead\n";
+        $symlink_text = $follow_symlinks ? "followed" : "stored as links";
+        $summary_data[] = ['Symbolic Links', number_format($symlink_count) . " ($symlink_text)"];
+    }
+    
+    if ($password) {
+        $summary_data[] = ['Archive Encryption', 'Enabled'];
+    }
+    
+    $widths = [25, 30];
+    foreach ($summary_data as $row) {
+        print_table_row($row, $widths);
+    }
+    
+    // Display compression statistics
+    print_header("SIZE STATISTICS");
+    
+    $compression_data = [
+        ['Original Size', $compression_stats['original_formatted']],
+        ['Archive Size', $compression_stats['archive_formatted']],
+    ];
+    
+    // Show size difference with appropriate label
+    if ($compression_stats['difference'] >= 0) {
+        $compression_data[] = ['Size Reduction', $compression_stats['difference_formatted']];
+    } else {
+        $compression_data[] = ['Size Increase', format_file_size(abs($compression_stats['difference']))];
+    }
+    
+    $compression_data[] = ['Compression Ratio', $compression_stats['ratio_formatted']];
+    
+    foreach ($compression_data as $row) {
+        print_table_row($row, $widths);
+    }
+    
+    if ($skipped_count > 0) {
+        echo "\n";
+        print_warning("⚠️  Some files were skipped due to permission issues:");
+        foreach (array_slice($skipped_files, 0, 5) as $skipped_file) {
+            $reason = $skipped_reasons[$skipped_file] ?? "Unknown reason";
+            echo colorize("    • $skipped_file ($reason)", COLOR_YELLOW) . "\n";
+        }
+        if (count($skipped_files) > 5) {
+            echo colorize("    ... and " . (count($skipped_files) - 5) . " more", COLOR_YELLOW) . "\n";
         }
     }
 
@@ -2582,6 +2830,266 @@ function test_archive_password($rarfile, $password) {
     
     // RAR returns code 0 for successful access, 10 for password error
     return $code === 0;
+}
+
+/**
+ * Get archive file size
+ * 
+ * Gets the size of the RAR archive file and returns it in bytes.
+ * 
+ * @param string $rarfile RAR archive file path
+ * @return int Size in bytes, or 0 if file doesn't exist
+ */
+function get_archive_size($rarfile) {
+    $rarfile_abs = get_rar_absolute_path($rarfile);
+    
+    if (!file_exists($rarfile_abs)) {
+        return 0;
+    }
+    
+    $stat = @stat($rarfile_abs);
+    return $stat !== false ? $stat['size'] : 0;
+}
+
+/**
+ * Calculate compression ratio and size difference
+ * 
+ * Calculates the compression ratio and size difference between
+ * original files and the archive.
+ * 
+ * @param int $original_size Total size of original files in bytes
+ * @param int $archive_size Size of archive file in bytes
+ * @return array Array with 'ratio', 'difference', and formatted strings
+ */
+function calculate_compression_stats($original_size, $archive_size) {
+    if ($original_size === 0) {
+        return [
+            'ratio' => 0,
+            'difference' => 0,
+            'ratio_formatted' => '0%',
+            'difference_formatted' => '0 Bytes',
+            'original_formatted' => '0 Bytes',
+            'archive_formatted' => '0 Bytes'
+        ];
+    }
+    
+    // Calculate compression ratio: (original - archive) / original * 100
+    // Positive ratio means compression (archive smaller than original)
+    // Negative ratio means expansion (archive larger than original)
+    $ratio = (($original_size - $archive_size) / $original_size) * 100;
+    $difference = $original_size - $archive_size;
+    
+    return [
+        'ratio' => $ratio,
+        'difference' => $difference,
+        'ratio_formatted' => number_format($ratio, 1) . '%',
+        'difference_formatted' => format_file_size($difference),
+        'original_formatted' => format_file_size($original_size),
+        'archive_formatted' => format_file_size($archive_size)
+    ];
+}
+
+/**
+ * Count files that will be added to the archive
+ * 
+ * Counts the number of files in the temp directory that will be added to the archive.
+ * 
+ * @param string $temp_dir Temporary directory containing files to archive
+ * @return int Number of files to be archived
+ */
+function count_files_to_archive($temp_dir) {
+    $count = 0;
+    
+    // Count files in files/ directory
+    $files_dir = "$temp_dir/files";
+    if (is_dir($files_dir)) {
+        $count += count(scandir($files_dir)) - 2; // Subtract . and ..
+    }
+    
+    // Count files in versions/ directory
+    $versions_dir = "$temp_dir/versions";
+    if (is_dir($versions_dir)) {
+        $count += count(scandir($versions_dir)) - 2; // Subtract . and ..
+    }
+    
+    // Add bitfreeze.php and README.txt
+    $count += 2;
+    
+    return $count;
+}
+
+/**
+ * Create a progress bar with spinning indicator
+ * 
+ * @param int $current Current progress value
+ * @param int $total Total value
+ * @param int $width Bar width in characters
+ * @param bool $spinning Whether to show spinning indicator
+ * @return string Progress bar string
+ */
+function create_progress_bar($current, $total, $width = 50, $spinning = false) {
+    if ($total <= 0) return '';
+    
+    $percentage = min(100, ($current / $total) * 100);
+    $filled = round(($width * $percentage) / 100);
+    $empty = $width - $filled;
+    
+    $bar = colorize(str_repeat('█', $filled), COLOR_GREEN);
+    $bar .= colorize(str_repeat('░', $empty), COLOR_DIM);
+    
+    $spinner = '';
+    if ($spinning && $percentage < 100) {
+        $spinners = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+        $spinner = ' ' . $spinners[intval(microtime(true) * 10) % count($spinners)];
+    }
+    
+    //return sprintf("[%s] %3.1f%%%s", $bar, $percentage, $spinner);
+    return sprintf("[%s] %.2f%%%s", $bar, $percentage, $spinner);
+}
+
+/**
+ * Execute RAR command with progress tracking
+ * 
+ * Executes the RAR command with suppressed output and shows a progress bar instead.
+ * 
+ * @param string $rar_cmd RAR command to execute
+ * @param int $total_files Total number of files being archived
+ * @return bool True if successful, false otherwise
+ */
+function execute_rar_with_progress($rar_cmd, $total_files) {
+    // Remove -inul to capture output for progress tracking
+    // $rar_cmd .= ' -inul';
+    
+    // Start progress display
+    $encryption_status = strpos($rar_cmd, ' -hp') !== false ? "encrypted " : "";
+    echo colorize("📦 Recording {$encryption_status}data to archive...", COLOR_CYAN) . "\n";
+    
+    // Execute RAR command and monitor output for progress
+    $start_time = microtime(true);
+    $output_lines = 0;
+    $expected_lines = $total_files + 20; // Much more realistic - just files + overhead
+    
+    // Start the RAR process
+    $descriptors = [
+        0 => ['pipe', 'r'],
+        1 => ['pipe', 'w'],
+        2 => ['pipe', 'w']
+    ];
+    
+    $process = proc_open($rar_cmd, $descriptors, $pipes);
+    
+    if (!is_resource($process)) {
+        return false;
+    }
+    
+    // Close input pipe
+    fclose($pipes[0]);
+    
+    // Set pipes to non-blocking mode
+    stream_set_blocking($pipes[1], false);
+    stream_set_blocking($pipes[2], false);
+    
+    $current_progress = 0;
+    $output_buffer = '';
+    $output_lines = 0;
+    $progress = 0;
+
+    while (true) {
+        // Check if process is still running
+        $status = proc_get_status($process);
+        if (!$status['running']) {
+            // After the process exits, there may be a little buffered output to consume:
+            while (($output = fgets($pipes[1])) !== false) {
+                $output_buffer .= $output;
+            }
+            break;
+        }
+
+        // Prepare for stream_select
+        $read = [$pipes[1]];
+        $write = null;
+        $except = null;
+
+        $ready = @stream_select($read, $write, $except, 0, 50000);
+
+        if ($ready && $ready > 0) {
+            $output = fgets($pipes[1]);
+            if ($output !== false) {
+                $output_buffer .= $output;
+                // Now count lines (handle multiple lines at once)
+                $lines = explode("\n", $output_buffer);
+                // Leave the last partial line in buffer
+                $output_buffer = array_pop($lines);
+
+                foreach ($lines as $line) {
+                    if (trim($line) !== '') {
+                        $output_lines++;
+                    }
+                }
+                // Calculate progress
+                //$progress = min(100, max(0, intval(($output_lines / $expected_lines) * 100)));
+                $progress = min(100, max(0, ($output_lines / $expected_lines) * 100));
+                if ($progress !== $current_progress) {
+                    echo "\r" . create_progress_bar($progress, 100, 40, true);
+                    $current_progress = $progress;
+                }
+            }
+        } else {
+            echo "\r" . create_progress_bar($progress, 100, 40, true);
+            usleep(20000);
+        }
+    }
+
+    // After loop, flush any remaining lines in buffer
+    // if (trim($output_buffer) !== '') {
+    //     $output_lines++;
+    //     $progress = min(95, max(5, intval(($output_lines / $expected_lines) * 100)));
+    //     echo "\r" . create_progress_bar($progress, 100, 40, true);
+    // }
+    
+    // Close pipes
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    
+    // Get return code
+    $return_code = proc_close($process);
+    
+    // Show completion
+    echo "\r" . create_progress_bar(100, 100, 40, false) . "\n";
+    
+    return $return_code === 0;
+}
+
+/**
+ * Format duration in a human-readable way
+ * 
+ * @param float $seconds Duration in seconds
+ * @return string Formatted duration string
+ */
+function format_duration($seconds) {
+    if ($seconds < 60) {
+        return number_format($seconds, 2) . ' seconds';
+    }
+    
+    $hours = intval($seconds / 3600);
+    $minutes = intval(($seconds % 3600) / 60);
+    $remaining_seconds = $seconds % 60;
+    
+    $parts = [];
+    
+    if ($hours > 0) {
+        $parts[] = $hours . ' hour' . ($hours > 1 ? 's' : '');
+    }
+    
+    if ($minutes > 0) {
+        $parts[] = $minutes . ' minute' . ($minutes > 1 ? 's' : '');
+    }
+    
+    if ($remaining_seconds > 0 || count($parts) === 0) {
+        $parts[] = number_format($remaining_seconds, 2) . ' second' . ($remaining_seconds != 1 ? 's' : '');
+    }
+    
+    return implode(', ', $parts);
 }
 
 
