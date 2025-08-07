@@ -1421,7 +1421,7 @@ function store($folder, $rarfile, $comment, $password = null) {
     }
     echo "  Snapshot manifest:      $manifest_filename\n";
     echo "  Comment Filename:       $comment_filename\n";
-    echo "  Directories recorded:    " . count($all_dirs) . "\n";
+    echo "  Directories recorded:   " . number_format(count($all_dirs)) . "\n";
     if ($symlink_count > 0) {
         if ($follow_symlinks) {
             echo "  Symbolic links:          " . number_format($symlink_count) . " (followed)\n";
