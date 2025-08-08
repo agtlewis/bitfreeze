@@ -27,12 +27,13 @@ BitFreeze is a powerful, intelligent backup system that creates version based ba
 
 ### 🔧 Advanced Operations
 - **List Snapshots**: View all available backup versions
-- **Restore Capabilities**: Restore specific snapshots to any location with full metadata preservation
+- **Checkout Capabilities**: Checkout specific snapshots to any location with full metadata preservation
 - **Archive Repair**: Built-in repair for damaged archives
 - **Password Protection**: AES-256 encryption with command-line password support
 - **Metadata Preservation**: File permissions, ownership, timestamps, and attributes are preserved
 - **Symbolic Link Support**: Handles symlinks with configurable behavior
 - **Sudo Integration**: Automatic privilege escalation for protected files
+- **Resource Management**: CPU priority control to minimize system impact
 
 ## 📋 Requirements
 
@@ -72,16 +73,16 @@ brew install rar php
 
 ```bash
 # Create a new repository or add a snapshot to an existing repository
-php bitfreeze.php store /source/path archive.rar "Daily Snapshot"
+php bitfreeze.php commit /source/path archive.rar "Daily Snapshot"
 
 # Create encrypted repository or add a snapshot to an existing encrypted repository
-php bitfreeze.php store /source/path archive.rar "Daily Snapshot" -p securepass
+php bitfreeze.php commit /source/path archive.rar "Daily Snapshot" -p securepass
 
 # List available snapshots
 php bitfreeze.php list archive.rar
 
-# Restore a snapshot
-php bitfreeze.php restore 1 archive.rar /restore/path
+# Checkout a snapshot
+php bitfreeze.php checkout 1 archive.rar /checkout/path
 
 # Compare snapshots
 php bitfreeze.php diff 1 4 archive.rar
@@ -96,12 +97,17 @@ php bitfreeze.php repair archive.rar
 
 #### Basic Snapshot
 ```bash
-php bitfreeze.php store /home/user/documents archive.rar "Daily Snapshot"
+php bitfreeze.php commit /home/user/documents archive.rar "Daily Snapshot"
 ```
 
 #### Encrypted Snapshot (New Repositories or Existing Encrypted Repositories Only)
 ```bash
-php bitfreeze.php store /var/www/website archive.rar "Website Snapshot" -p securepass
+php bitfreeze.php commit /var/www/website archive.rar "Website Snapshot" -p securepass
+```
+
+#### Low Priority Backup (Minimizes System Impact)
+```bash
+php bitfreeze.php commit /var/www/website archive.rar "Website Snapshot" --low-priority
 ```
 
 ### Listing Snapshots
@@ -120,14 +126,17 @@ php bitfreeze.php list archive.rar -p securepass
 # 1     2024-01-01 14:30:05 Initial Snapshot
 ```
 
-### Restoring Snapshots
+### Checking Out Snapshots
 
 ```bash
-# Restore snapshot ID 2 to /restore/path
-php bitfreeze.php restore 2 archive.rar /restore/path
+# Checkout snapshot ID 2 to /checkout/path
+php bitfreeze.php checkout 2 archive.rar /checkout/path
 
-# Restore to current directory
-php bitfreeze.php restore 1 archive.rar ./restored
+# Checkout to current directory
+php bitfreeze.php checkout 1 archive.rar ./checked-out
+
+# Checkout with low priority (minimizes system impact)
+php bitfreeze.php checkout 1 archive.rar /checkout/path --low-priority
 ```
 
 ### Comparing Snapshots
@@ -145,7 +154,7 @@ php bitfreeze.php diff 1 4 archive.rar
 
 ### Metadata Preservation
 
-BitFreeze preserves complete file metadata during backup and restoration:
+BitFreeze preserves complete file metadata during backup and checkout:
 
 - **File Permissions**: Unix permissions (read/write/execute) are preserved
 - **Ownership**: User and group ownership information is maintained
@@ -157,10 +166,10 @@ BitFreeze preserves complete file metadata during backup and restoration:
 
 ```bash
 # Default behavior: Store symlinks as links (not their targets)
-php bitfreeze.php store /path/with/symlinks archive.rar "Snapshot"
+php bitfreeze.php commit /path/with/symlinks archive.rar "Snapshot"
 
 # Follow symlinks and backup their contents
-php bitfreeze.php store /path/with/symlinks archive.rar "Snapshot" --follow-symlinks
+php bitfreeze.php commit /path/with/symlinks archive.rar "Snapshot" --follow-symlinks
 ```
 
 ### Sudo Integration
@@ -172,11 +181,23 @@ BitFreeze automatically detects when elevated privileges are needed:
 - **Privileged Access**: Uses sudo to access protected files and directories
 - **Secure Handling**: Password is handled securely and not stored
 
+### Resource Management
+
+BitFreeze includes intelligent resource management to minimize system impact:
+
+- **CPU Priority Control**: Use `--low-priority` flag to run with reduced CPU priority (nice level 10)
+- **Default Priority**: Normal operations use slightly reduced priority (nice level 1)
+- **System-Friendly**: Designed to avoid impacting other system processes
+- **Progress Tracking**: Real-time progress indicators for long operations
+
 ### Repairing Archives
 
 ```bash
 # Repair a damaged archive
 php bitfreeze.php repair archive.rar
+
+# Repair with low priority (minimizes system impact)
+php bitfreeze.php repair archive.rar --low-priority
 ```
 
 ## 🔧 How It Works
@@ -214,6 +235,7 @@ archive.rar/
 - **Metadata Preservation**: Complete file attributes and permissions are maintained
 - **Privilege Escalation**: Automatic sudo integration for protected files
 - **Symbolic Link Handling**: Configurable symlink behavior with `--follow-symlinks`
+- **Resource Management**: CPU priority control with `--low-priority` option
 
 ## 📊 Benefits Over Traditional Backup Systems
 
@@ -222,22 +244,23 @@ archive.rar/
 | **Storage Efficiency** | Files stored multiple times | Unique content stored once |
 | **Moving Files** | Increases archive size | No size increase |
 | **Version Control** | Limited or none | Full snapshot history |
-| **Recovery** | Basic | Advanced with repair |
+| **Recovery** | Basic | Advanced with checkout and repair |
 | **Encryption** | Often separate | Built-in AES-256 |
 | **Deduplication** | None | Content Aware |
 | **Corruption Protection** | Limited | Robust Recovery Records |
 | **Metadata Preservation** | Limited | Complete File Attributes |
 | **Privilege Handling** | Manual | Automatic Sudo Integration |
+| **Resource Management** | None | CPU Priority Control |
 
 ## 🔍 Use Cases
 
 ### Web Development
 ```bash
 # Backup website before deployment
-php bitfreeze.php store /var/www/mywebsite archive.rar "Pre-deployment snapshot"
+php bitfreeze.php commit /var/www/mywebsite archive.rar "Pre-deployment snapshot"
 
 # Backup after changes
-php bitfreeze.php store /var/www/mywebsite archive.rar "Post-deployment snapshot"
+php bitfreeze.php commit /var/www/mywebsite archive.rar "Post-deployment snapshot"
 
 # Compare what changed
 php bitfreeze.php diff 1 2 archive.rar
@@ -246,19 +269,28 @@ php bitfreeze.php diff 1 2 archive.rar
 ### Document Management
 ```bash
 # Daily document backup
-php bitfreeze.php store /home/user/documents archive.rar "Daily Snapshot"
+php bitfreeze.php commit /home/user/documents archive.rar "Daily Snapshot"
 
 # Weekly backup with comment
-php bitfreeze.php store /home/user/documents archive.rar "Weekly document snapshot"
+php bitfreeze.php commit /home/user/documents archive.rar "Weekly document snapshot"
 ```
 
 ### System Administration
 ```bash
 # Backup configuration files
-php bitfreeze.php store /etc archive.rar "System config snapshot"
+php bitfreeze.php commit /etc archive.rar "System config snapshot"
 
 # Backup user data
-php bitfreeze.php store /home archive.rar "User data snapshot"
+php bitfreeze.php commit /home archive.rar "User data snapshot"
+```
+
+### Production Server Backups
+```bash
+# Low-priority backup to avoid impacting production services
+php bitfreeze.php commit /var/www/production archive.rar "Nightly backup" --low-priority
+
+# Encrypted backup with low priority
+php bitfreeze.php commit /var/www/production archive.rar "Nightly backup" -p securepass --low-priority
 ```
 
 ## 🛠️ Advanced Configuration
@@ -270,6 +302,14 @@ The recovery record size is configurable in the script:
 ```php
 define('RECOVERY_RECORD_SIZE', 6); // Set as a percentage
 ```
+
+### CPU Priority Levels
+
+BitFreeze uses different CPU priority levels to manage system impact:
+
+- **Default Priority**: `nice 1` - Slightly reduced priority for normal operations
+- **Low Priority**: `nice 10` - Significantly reduced priority when using `--low-priority`
+- **System Impact**: Lower priority means other processes get CPU time first
 
 ## 🔧 Troubleshooting
 
@@ -323,13 +363,15 @@ find /path/to/backup -type f -exec test -r {} \; -print
 4. **Regular Maintenance**: Periodically verify archive integrity
 5. **Sudo Caching**: Use `sudo -n` or configure sudoers for passwordless sudo
 6. **Symlink Strategy**: Use `--follow-symlinks` only when necessary to avoid duplicates
+7. **Resource Management**: Use `--low-priority` for production environments to minimize system impact
 
 ## 📈 Performance Characteristics
 
 - **Backup Speed**: Depends on file count and size
 - **Storage Efficiency**: 50-90% space savings vs traditional backups
-- **Restore Speed**: Fast due to deduplication
+- **Checkout Speed**: Fast due to deduplication
 - **Memory Usage**: Minimal, processes files sequentially
+- **CPU Impact**: Configurable priority levels minimize system impact
 
 ## 🤝 Contributing
 

@@ -34,9 +34,9 @@
  * - Automatic integrity checking during operations
  * 
  * Usage Examples:
- * - Create backup: php bitfreeze.php store /home/user/documents archive.rar "Daily Snapshot" -p password
+ * - Create backup: php bitfreeze.php commit /home/user/documents archive.rar "Daily Snapshot" -p password
  * - List snapshots: php bitfreeze.php list archive.rar -p password
- * - Restore snapshot: php bitfreeze.php restore 1 archive.rar /restore/path -p password
+ * - Checkout snapshot: php bitfreeze.php checkout 1 archive.rar /checkout/path -p password
  * - Compare snapshots: php bitfreeze.php diff 1 4 archive.rar -p password
  * - Repair archive: php bitfreeze.php repair archive.rar -p password
 
@@ -79,107 +79,6 @@ define('COLOR_BG_CYAN', "\033[46m");
 define('COLOR_BG_WHITE', "\033[47m");
 
 /**
- * Check if terminal supports colors
- * 
- * @return bool True if colors are supported
- */
-function supports_colors() {
-    return function_exists('posix_isatty') && posix_isatty(STDOUT);
-}
-
-/**
- * Apply color to text if colors are supported
- * 
- * @param string $text Text to colorize
- * @param string $color ANSI color code
- * @return string Colored text or original text
- */
-function colorize($text, $color) {
-    return supports_colors() ? $color . $text . COLOR_RESET : $text;
-}
-
-/**
- * Print a formatted table row
- * 
- * @param array $columns Array of column values
- * @param array $widths Array of column widths
- * @param string $separator Column separator
- * @return void
- */
-function print_table_row($columns, $widths, $separator = '  ') {
-    $row = '';
-    foreach ($columns as $i => $column) {
-        $width = $widths[$i] ?? 20;
-        $row .= str_pad($column, $width) . $separator;
-    }
-    echo $row . "\n";
-}
-
-/**
- * Print a header with styling
- * 
- * @param string $text Header text
- * @param string $char Character to use for underline
- * @param int $width Width of the header
- * @return void
- */
-function print_header($text, $char = '=', $width = 60) {
-    $text_length = strlen($text) + 4; // '  ' before and after
-    $line_length = max($width, $text_length);
-    $line = str_repeat($char, $line_length);
-
-    // Center the text within $line_length
-    $padding = $line_length - strlen($text);
-    $left = floor($padding / 2);
-    $right = $padding - $left;
-    $centered_text = str_repeat(' ', $left - 1) . $text . str_repeat(' ', $right - 1);
-
-    echo "\n" . colorize($line, COLOR_CYAN) . "\n";
-    echo colorize($centered_text, COLOR_BOLD . COLOR_CYAN) . "\n";
-    echo colorize($line, COLOR_CYAN) . "\n\n";
-}
-
-/**
- * Print a success message
- * 
- * @param string $message Success message
- * @return void
- */
-function print_success($message) {
-    echo colorize("  $message", COLOR_GREEN) . "\n";
-}
-
-/**
- * Print a warning message
- * 
- * @param string $message Warning message
- * @return void
- */
-function print_warning($message) {
-    echo colorize("  $message", COLOR_YELLOW) . "\n";
-}
-
-/**
- * Print an error message
- * 
- * @param string $message Error message
- * @return void
- */
-function print_error($message) {
-    echo colorize("  $message", COLOR_RED) . "\n";
-}
-
-/**
- * Print an info message
- * 
- * @param string $message Info message
- * @return void
- */
-function print_info($message) {
-    echo colorize("  $message", COLOR_CYAN) . "\n";
-}
-
-/**
  * Redundant information (recovery record) may be added to RAR archive. While it increases the archive 
  * size, it helps to recover archived files in case of disk failure or data loss of other kind, provided that damage
  *  is not too severe. Such damage recovery can be done with command "r". ZIP archive format does not support 
@@ -192,14 +91,15 @@ function print_info($message) {
  * repair data even in case of deletions or insertions of reasonable size, when data positions were shifted.
  */
 define('RECOVERY_RECORD_SIZE', 6); // Set as a percentage
+define('PROGRESS_BAR_WIDTH', 49);
 
 define('USAGE_TEXT', <<<USAGE
 Usage:
-  php {$argv[0]} store <folder> <archive.rar> [comment] [-p password] [--follow-symlinks]
+  php {$argv[0]} commit <folder> <archive.rar> [comment] [-p password] [--follow-symlinks] [--low-priority]
   php {$argv[0]} list <archive.rar> [-p password]
-  php {$argv[0]} restore <snapshot_id> <archive.rar> <restore_folder> [-p password]
+  php {$argv[0]} checkout <snapshot_id> <archive.rar> <checkout_folder> [-p password] [--low-priority]
   php {$argv[0]} diff <version1> <version2> <archive.rar> [-p password]
-  php {$argv[0]} repair <archive.rar> [-p password]
+  php {$argv[0]} repair <archive.rar> [-p password] [--low-priority]
 
 When creating a backup, you can optionally provide a comment describing the backup.
 Comments are displayed when listing available versions.
@@ -208,31 +108,34 @@ Options:
   -p password          Password for archive encryption/access
   --follow-symlinks    Follow symbolic links and backup their contents
                        (default: symlinks are detected but not backed up)
+  --low-priority       Use lower CPU priority (nice level 10) to avoid
+                       impacting other system processes
 
 Password can be provided via:
   - Command line argument: -p password
 
 Examples:
-  php {$argv[0]} store /home/user/documents archive.rar "Daily Snapshot" -p password
-  php {$argv[0]} store /var/www/domain.com archive.rar "Website Snapshot" -p password --follow-symlinks
+  php {$argv[0]} commit /home/user/documents archive.rar "Daily Snapshot" -p password
+  php {$argv[0]} commit /var/www/domain.com archive.rar "Website Snapshot" -p password --low-priority
   php {$argv[0]} list archive.rar -p password
+  php {$argv[0]} checkout 1 archive.rar /checkout/path -p password --low-priority
   php {$argv[0]} diff 1 4 archive.rar -p password
-  php {$argv[0]} repair archive.rar -p password
+  php {$argv[0]} repair archive.rar -p password --low-priority
   
 USAGE);
 
 define('README_TEXT', <<<README
 This archive was created by bitfreeze.php.
 
-To restore or list contents, extract bitfreeze.php from this archive and run:
+To checkout or list contents, extract bitfreeze.php from this archive and run:
 
     php bitfreeze.php list <this-archive.rar>
-    php bitfreeze.php restore <snapshot_id> <this-archive.rar> <output-folder>
+    php bitfreeze.php checkout <snapshot_id> <this-archive.rar> <output-folder>
 
 For example:
     rar e <this-archive.rar> bitfreeze.php
     php bitfreeze.php list <this-archive.rar>
-    php bitfreeze.php restore 1 <this-archive.rar> restored/
+    php bitfreeze.php checkout 1 <this-archive.rar> checked-out/
 
 For full usage:
     php bitfreeze.php
@@ -366,6 +269,89 @@ function format_file_size($bytes, $precision = 2) {
     }
     
     return number_format($size, $precision) . ' ' . $units[$unit_index];
+}
+
+/**
+ * Parse memory limit string to bytes
+ * 
+ * Converts memory limit strings like "128M", "2G", "512K" to bytes.
+ * 
+ * @param string $memory_limit Memory limit string (e.g., "128M", "2G", "512K")
+ * @return int Memory limit in bytes
+ */
+function parse_memory_limit($memory_limit) {
+    $memory_limit = trim($memory_limit);
+    
+    // Handle unlimited case
+    if ($memory_limit === '-1' || strtolower($memory_limit) === 'unlimited') {
+        return -1;
+    }
+    
+    $last = strtolower($memory_limit[strlen($memory_limit) - 1]);
+    $value = (int)substr($memory_limit, 0, -1);
+    
+    switch ($last) {
+        case 'g':
+            $value *= 1024;
+        case 'm':
+            $value *= 1024;
+        case 'k':
+            $value *= 1024;
+    }
+    
+    return $value;
+}
+
+/**
+ * Get current memory usage statistics
+ * 
+ * @return array Memory usage data
+ */
+function get_memory_usage() {
+    $memory_limit = ini_get('memory_limit');
+    $memory_usage = memory_get_usage(true);
+    $memory_peak = memory_get_peak_usage(true);
+    
+    // Convert memory_limit to bytes
+    $limit_bytes = parse_memory_limit($memory_limit);
+    
+    return [
+        'current' => $memory_usage,
+        'peak' => $memory_peak,
+        'limit' => $limit_bytes,
+        'percentage' => $limit_bytes > 0 ? ($memory_usage / $limit_bytes) * 100 : 0,
+        'available' => $limit_bytes > 0 ? $limit_bytes - $memory_usage : 0
+    ];
+}
+
+/**
+ * Check if --low-priority flag is present
+ * 
+ * @return bool True if --low-priority is present
+ */
+function has_low_priority_flag() {
+    global $argv;
+    return in_array('--low-priority', $argv);
+}
+
+/**
+ * Get nice level based on command line arguments
+ * 
+ * @return int Nice level to use (1 for default, 10 for --low-priority)
+ */
+function get_nice_level_for_backup() {
+    return has_low_priority_flag() ? 10 : 1;
+}
+
+/**
+ * Add nice level to RAR command
+ * 
+ * @param string $rar_cmd Base RAR command
+ * @return string RAR command with nice level
+ */
+function add_nice_to_rar_command($rar_cmd) {
+    $nice_level = get_nice_level_for_backup();
+    return "nice -n $nice_level $rar_cmd";
 }
 
 /**
@@ -846,9 +832,15 @@ function is_archive_encrypted($rarfile) {
         return false; // File doesn't exist, so not encrypted
     }
     
+    // Check if file has content (not empty)
+    $file_size = filesize($rarfile_abs);
+    if ($file_size === 0) {
+        return false; // Empty file, not encrypted
+    }
+    
     // Try to list archive contents without password
-    // Redirect input to /dev/null to prevent hanging on password prompt
-    $rar_cmd = 'rar lb -inul ' . escapeshellarg($rarfile_abs) . ' </dev/null 2>/dev/null';
+    // Use a more robust approach that won't prompt for passwords
+    $rar_cmd = 'printf "" | rar lb -inul ' . escapeshellarg($rarfile_abs) . ' 2>/dev/null';
     
     exec($rar_cmd, $output, $code);
     
@@ -919,13 +911,20 @@ function get_password_with_detection($rarfile) {
     }
     
     // If no password provided or -p was used without value, check if archive is encrypted
-    if (($password === null || $should_prompt) && file_exists($rarfile)) {
-        if (is_archive_encrypted($rarfile)) {
-            // Create a test function for this specific archive
-            $test_function = function($test_password) use ($rarfile) {
-                return test_archive_password($rarfile, $test_password);
-            };
-            $password = prompt_for_password_with_retry(basename($rarfile), $test_function);
+    if ($password === null || $should_prompt) {
+        if (file_exists($rarfile)) {
+            // Archive exists - check if it's encrypted
+            $is_encrypted = is_archive_encrypted($rarfile);
+            if ($is_encrypted) {
+                // Create a test function for this specific archive
+                $test_function = function($test_password) use ($rarfile) {
+                    return test_archive_password($rarfile, $test_password);
+                };
+                $password = prompt_for_password_with_retry(basename($rarfile), $test_function);
+            }
+        } else if ($should_prompt) {
+            // Archive doesn't exist but -p was used without value - prompt for encryption password
+            $password = prompt_for_encryption_password();
         }
     } else if ($password !== null && file_exists($rarfile) && is_archive_encrypted($rarfile)) {
         // If password was provided via command line, test it
@@ -945,10 +944,10 @@ function get_password_with_detection($rarfile) {
 /**
  * Remove password arguments from argv for cleaner command parsing
  * 
- * Filters out the -p password arguments from the command line arguments
+ * Filters out the -p password arguments and --low-priority flag from the command line arguments
  * to simplify the argument parsing in the main command dispatch.
  * 
- * @return array Cleaned command line arguments without password
+ * @return array Cleaned command line arguments without password and flags
  */
 function clean_argv() {
     global $argv;
@@ -967,6 +966,11 @@ function clean_argv() {
             if (isset($argv[$i + 1]) && $argv[$i + 1][0] !== '-') {
                 $skip_next = true;
             }
+            continue;
+        }
+
+        // Skip --low-priority flag
+        if ($argv[$i] === '--low-priority') {
             continue;
         }
 
@@ -1075,33 +1079,18 @@ $cmd            = $argv[1];
 $cleaned_argv   = clean_argv();
 
 switch ($cmd) {
-    case 'store':
+    case 'commit':
         if (count($cleaned_argv) < 4 || count($cleaned_argv) > 6) usage();
         $comment = count($cleaned_argv) >= 5 ? $cleaned_argv[4] : "Automated Snapshot";
-        $password = get_password();
-        // For store command, if -p was used without value, prompt for encryption password
-        if ($password === null) {
-            global $argv;
-            for ($i = 1; $i < count($argv); $i++) {
-                if ($argv[$i] === '-p') {
-                    // If -p is followed by a value, password was already returned
-                    if (isset($argv[$i + 1]) && $argv[$i + 1][0] !== '-') {
-                        break;
-                    }
-                    // If -p is provided without a value, prompt for encryption password
-                    $password = prompt_for_encryption_password();
-                    break;
-                }
-            }
-        }
-        store($cleaned_argv[2], $cleaned_argv[3], $comment, $password);
+        $password = get_password_with_detection($cleaned_argv[3]);
+        commit($cleaned_argv[2], $cleaned_argv[3], $comment, $password);
         break;
     case 'list':
         if (count($cleaned_argv) !== 3) usage();
         $password = get_password_with_detection($cleaned_argv[2]);
         list_versions($cleaned_argv[2], $password);
         break;
-    case 'restore':
+    case 'checkout':
         if (count($cleaned_argv) !== 5) usage();
         $password = get_password_with_detection($cleaned_argv[3]);
         // Only exit if archive is encrypted but no password provided
@@ -1110,7 +1099,7 @@ switch ($cmd) {
             echo "Use -p password to provide the password.\n";
             exit(1);
         }
-        restore($cleaned_argv[2], $cleaned_argv[3], $cleaned_argv[4], $password);
+        checkout($cleaned_argv[2], $cleaned_argv[3], $cleaned_argv[4], $password);
         break;
     case 'diff':
         if (count($cleaned_argv) !== 5) usage();
@@ -1218,7 +1207,7 @@ function scanDirGeneratorForDirs($dir, $sudo_password = null) {
  * @param string|null $password Password for archive protection
  * @return void
  */
-function store($folder, $rarfile, $comment, $password = null) {
+function commit($folder, $rarfile, $comment, $password = null) {
     global $argv;
     $folder = rtrim(realpath($folder), '/');
 
@@ -1596,6 +1585,9 @@ function store($folder, $rarfile, $comment, $password = null) {
 
     print_header("WRITING DATA");
     
+    // Add nice level to RAR command
+    $rar_cmd = add_nice_to_rar_command($rar_cmd);
+    
     // Execute RAR with progress tracking
     $rar_success = execute_rar_with_progress($rar_cmd, $files_to_archive);
     chdir($cwd);
@@ -1679,6 +1671,21 @@ function store($folder, $rarfile, $comment, $password = null) {
         }
     }
 
+    // Display resource usage summary
+    // print_header("RESOURCE USAGE");
+    // $memory = get_memory_usage();
+
+    // $resource_data = [
+    //     ['Peak Memory Usage', format_file_size($memory['peak'])],
+    //     ['Memory Limit', format_file_size($memory['limit'])],
+    //     ['CPU Priority', has_low_priority_flag() ? 'Low (nice 10)' : 'Reduced (nice 1)'],
+    // ];
+
+    // $widths = [25, 30];
+    // foreach ($resource_data as $row) {
+    //     print_table_row($row, $widths);
+    // }
+
     exit(0);
 }
 
@@ -1708,6 +1715,9 @@ function get_archive_hashes($rarfile, $password = null) {
     }
 
     $rar_cmd .= ' ' . escapeshellarg($rarfile_abs) . ' files/';
+    
+    // Add input redirection to prevent password prompts
+    $rar_cmd .= ' </dev/null 2>/dev/null';
     
     exec($rar_cmd, $lines, $code);
     
@@ -1751,6 +1761,9 @@ function get_next_snapshot_id($rarfile, $password = null) {
 
     $rar_cmd .= ' ' . escapeshellarg($rarfile_abs) . ' versions/';
     
+    // Add input redirection to prevent password prompts
+    $rar_cmd .= ' </dev/null 2>/dev/null';
+    
     exec($rar_cmd, $lines, $code);
     
     // If command failed for any reason, return 1 (new archive)
@@ -1793,6 +1806,9 @@ function list_versions($rarfile, $password = null) {
     }
 
     $rar_cmd .= ' ' . escapeshellarg($rarfile_abs) . ' versions/';
+    
+    // Add input redirection to prevent password prompts
+    $rar_cmd .= ' </dev/null 2>/dev/null';
     
     exec($rar_cmd, $lines, $code);
     
@@ -1886,23 +1902,25 @@ function get_comment_from_archive($rarfile, $comment_file, $password = null) {
 }
 
 /**
- * Restore a specific backup snapshot to a directory
+ * Checkout a specific backup snapshot to a directory
  * 
  * Extracts the specified snapshot from the archive and reconstructs
  * the file tree in the output directory. Handles file deduplication
  * and directory structure restoration.
  * 
- * @param int $snapshot_id ID of the snapshot to restore
+ * @param int $snapshot_id ID of the snapshot to checkout
  * @param string $rarfile RAR archive file path
- * @param string $outdir Output directory for restoration
+ * @param string $outdir Output directory for checkout
  * @param string|null $password Password for archive access
  * @return void
  */
-function restore($snapshot_id, $rarfile, $outdir, $password = null) {
+function checkout($snapshot_id, $rarfile, $outdir, $password = null) {
     $parent = dirname($outdir);
 
+    print_header("BUILDING VERSION $snapshot_id");
+
     if (!is_writable($parent)) {
-        echo "ERROR: Cannot restore to $outdir: Permission denied\n";
+        echo "ERROR: Cannot checkout to $outdir: Permission denied\n";
         exit(1);
     }
 
@@ -1925,7 +1943,8 @@ function restore($snapshot_id, $rarfile, $outdir, $password = null) {
         exit(1);
     }
 
-    echo "Restoring snapshot $snapshot_id: {$manifest['name']} ...\n";
+    echo "Preparing version $snapshot_id for checkout.\n";
+    echo "Manifest: " . str_replace('versions/', '', $manifest['name']) . "\n";
     
     // Check if we need sudo for permission restoration
     $sudo_password = null;
@@ -1940,14 +1959,18 @@ function restore($snapshot_id, $rarfile, $outdir, $password = null) {
     mkdir($temp, 0700, true);
 
     // 1. Extract manifest
-    $rar_cmd = 'rar e -inul';
+    $rar_cmd = 'rar e ';
 
     if ($password) {
         $rar_cmd .= ' -hp' . escapeshellarg($password);
     }
 
     $rar_cmd .= ' ' . escapeshellarg($rarfile) . ' ' . escapeshellarg($manifest['name']) . ' ' . escapeshellarg($temp);
+
+    // Add nice level to RAR command
+    $rar_cmd = add_nice_to_rar_command($rar_cmd);
     
+    // Execute RAR extraction without progress tracking for manifest
     exec($rar_cmd, $output1, $code1);
 
     $manifest_path = "$temp/" . basename($manifest['name']);
@@ -2084,7 +2107,8 @@ function restore($snapshot_id, $rarfile, $outdir, $password = null) {
         }
     }
 
-    echo "Will restore " . number_format(count($restorelist)) . " files (" . number_format(count($hashmap)) . " unique contents).\n";
+    echo "\n";
+    echo "Will checkout " . number_format(count($restorelist)) . " files (" . number_format(count($hashmap)) . " unique contents).\n";
 
     // 3. Extract all needed hashes (content blobs) to temp dir
     $all_hashes = array_keys($hashmap);
@@ -2108,7 +2132,16 @@ function restore($snapshot_id, $rarfile, $outdir, $password = null) {
 
     $rar_cmd .= ' ' . escapeshellarg($rarfile) . ' @"' . $exlistfile . '" ' . escapeshellarg($temp);
     
-    exec($rar_cmd, $output2, $code2);
+    // Add nice level to RAR command
+    $rar_cmd = add_nice_to_rar_command($rar_cmd);
+
+    print_header("EXTRACTING FILES");
+    echo colorize("⏳ Please wait...", COLOR_CYAN) . "\n";
+
+    // Execute RAR extraction with progress tracking
+    $code2 = execute_rar_extract_with_progress($rar_cmd, count($all_hashes)) ? 0 : 1;
+
+    echo "\n";
 
     // 4. Reconstruct file tree in outdir
     $restored   = 0;
@@ -2132,7 +2165,7 @@ function restore($snapshot_id, $rarfile, $outdir, $password = null) {
             if ($metadata) {
                 // Use enhanced restoration with metadata
                 if (!restore_file_with_metadata($src, $dest, $metadata, $sudo_password)) {
-                    echo "[ERROR] Could not restore $path\n";
+                    echo "[ERROR] Could not checkout $path\n";
                     $errors++;
                 } else {
                     $restored++;
@@ -2140,7 +2173,7 @@ function restore($snapshot_id, $rarfile, $outdir, $password = null) {
             } else {
                 // Fallback to basic restoration for old format
                 if (!copy($src, $dest)) {
-                    echo "[ERROR] Could not restore $path\n";
+                    echo "[ERROR] Could not checkout $path\n";
                     $errors++;
                 } else {
                     $restored++;
@@ -2152,11 +2185,12 @@ function restore($snapshot_id, $rarfile, $outdir, $password = null) {
         }
 
         if (($n+1) % 10 === 0) {
-            echo "\r  Restored " . ($n+1) . "/$count";
+            echo "\rChecked out " . ($n+1) . "/$count";
         }
     }
 
-    echo "\r  Restored " . ($n+1) . "/$count";
+    echo "\rChecked out " . ($n+1) . "/$count";
+    echo "\n";
 
     // Restore directory metadata after all files are processed
     foreach ($dir_metadata_restore as $dir_meta) {
@@ -2208,13 +2242,28 @@ function restore($snapshot_id, $rarfile, $outdir, $password = null) {
     // Clean up
     exec('rm -rf ' . escapeshellarg($temp));
 
-    echo "Restore complete.\n";
-    echo "===== SUMMARY =====\n";
-    echo "  Files restored: " . number_format($restored) . " / " . number_format($count) . "\n";
+    print_header("SUMMARY");
+
+    echo "Files checked out: " . number_format($restored) . " / " . number_format($count) . "\n";
 
     if ($errors) {
-        echo "  Errors: " . number_format($errors) . "\n";
+        echo "Errors: " . number_format($errors) . "\n";
     }
+
+    // Display resource usage summary
+    // print_header("RESOURCE USAGE");
+    // $memory = get_memory_usage();
+
+    // $resource_data = [
+    //     ['Peak Memory Usage', format_file_size($memory['peak'])],
+    //     ['Memory Limit', format_file_size($memory['limit'])],
+    //     ['CPU Priority', has_low_priority_flag() ? 'Low (nice 10)' : 'Reduced (nice 1)'],
+    // ];
+
+    // $widths = [25, 30];
+    // foreach ($resource_data as $row) {
+    //     print_table_row($row, $widths);
+    // }
 }
 
 /**
@@ -2236,6 +2285,9 @@ function find_manifest_for_snapshot($rarfile, $snapshot_id, $password = null) {
     }
 
     $rar_cmd .= ' ' . escapeshellarg($rarfile) . ' versions/';
+    
+    // Add input redirection to prevent password prompts
+    $rar_cmd .= ' </dev/null 2>/dev/null';
     
     exec($rar_cmd, $lines, $code);
     
@@ -2292,6 +2344,9 @@ function get_last_manifest($rarfile, $password = null) {
     }
 
     $rar_cmd .= ' ' . escapeshellarg($rarfile) . ' versions/';
+    
+    // Add input redirection to prevent password prompts
+    $rar_cmd .= ' </dev/null 2>/dev/null';
     
     exec($rar_cmd, $lines, $code);
     
@@ -2546,6 +2601,9 @@ function repair($rarfile, $password = null) {
     }
 
     $rar_cmd .= ' ' . escapeshellarg($rarfile);
+    
+    // Add nice level to RAR command
+    $rar_cmd = add_nice_to_rar_command($rar_cmd);
     
     echo "Running RAR repair command...\n";
     passthru($rar_cmd, $code);
@@ -2927,7 +2985,7 @@ function count_files_to_archive($temp_dir) {
  * @param bool $spinning Whether to show spinning indicator
  * @return string Progress bar string
  */
-function create_progress_bar($current, $total, $width = 50, $spinning = false) {
+function create_progress_bar($current, $total, $width = PROGRESS_BAR_WIDTH, $spinning = false) {
     if ($total <= 0) return '';
     
     $percentage = min(100, ($current / $total) * 100);
@@ -3030,12 +3088,12 @@ function execute_rar_with_progress($rar_cmd, $total_files) {
                 //$progress = min(100, max(0, intval(($output_lines / $expected_lines) * 100)));
                 $progress = min(100, max(0, ($output_lines / $expected_lines) * 100));
                 if ($progress !== $current_progress) {
-                    echo "\r" . create_progress_bar($progress, 100, 40, true);
+                    echo "\r" . create_progress_bar($progress, 100, PROGRESS_BAR_WIDTH, true);
                     $current_progress = $progress;
                 }
             }
         } else {
-            echo "\r" . create_progress_bar($progress, 100, 40, true);
+            echo "\r" . create_progress_bar($progress, 100, PROGRESS_BAR_WIDTH, true);
             usleep(20000);
         }
     }
@@ -3044,7 +3102,7 @@ function execute_rar_with_progress($rar_cmd, $total_files) {
     // if (trim($output_buffer) !== '') {
     //     $output_lines++;
     //     $progress = min(95, max(5, intval(($output_lines / $expected_lines) * 100)));
-    //     echo "\r" . create_progress_bar($progress, 100, 40, true);
+    //     echo "\r" . create_progress_bar($progress, 100, PROGRESS_BAR_WIDTH, true);
     // }
     
     // Close pipes
@@ -3055,7 +3113,114 @@ function execute_rar_with_progress($rar_cmd, $total_files) {
     $return_code = proc_close($process);
     
     // Show completion
-    echo "\r" . create_progress_bar(100, 100, 40, false) . "\n";
+    echo "\r" . create_progress_bar(100, 100, PROGRESS_BAR_WIDTH, false) . "\n";
+    
+    return $return_code === 0;
+}
+
+/**
+ * Execute RAR extraction command with progress tracking
+ * 
+ * Executes the RAR extraction command and shows a progress bar based on
+ * the number of files being extracted.
+ * 
+ * @param string $rar_cmd RAR extraction command to execute
+ * @param int $total_files Total number of files being extracted
+ * @return bool True if successful, false otherwise
+ */
+function execute_rar_extract_with_progress($rar_cmd, $total_files) {
+    // Remove output suppression flags to capture output for progress tracking
+    $rar_cmd = str_replace(' -inul', '', $rar_cmd);
+    $rar_cmd = str_replace(' -idq', '', $rar_cmd);
+
+    // Start progress display
+    $encryption_status = strpos($rar_cmd, ' -hp') !== false ? "encrypted " : "";
+    //echo colorize("📦 Extracting {$encryption_status}data from archive...", COLOR_CYAN) . "\n";
+    
+    // Execute RAR command and monitor output for progress
+    $start_time = microtime(true);
+    $extracted_files = 0;
+    $expected_files = $total_files;
+    
+    // Start the RAR process
+    $descriptors = [
+        0 => ['pipe', 'r'],
+        1 => ['pipe', 'w'],
+        2 => ['pipe', 'w']
+    ];
+    
+    $process = proc_open($rar_cmd, $descriptors, $pipes);
+    
+    if (!is_resource($process)) {
+        return false;
+    }
+    
+    // Close input pipe
+    fclose($pipes[0]);
+    
+    // Set pipes to non-blocking mode
+    stream_set_blocking($pipes[1], false);
+    stream_set_blocking($pipes[2], false);
+
+    $current_progress = 0;
+    $output_buffer = '';
+    $progress = 0;
+
+    while (true) {
+        // Check if process is still running
+        $status = proc_get_status($process);
+        if (!$status['running']) {
+            // After the process exits, there may be a little buffered output to consume:
+            while (($output = fgets($pipes[1])) !== false) {
+                $output_buffer .= $output;
+            }
+            break;
+        }
+
+        // Prepare for stream_select
+        $read = [$pipes[1]];
+        $write = null;
+        $except = null;
+
+        $ready = stream_select($read, $write, $except, 0, 50000);
+
+        if ($ready && $ready > 0) {
+            $output = fgets($pipes[1]);
+            if ($output !== false) {
+                $output_buffer .= $output;
+                // Now count extracted files (handle multiple lines at once)
+                $lines = explode("\n", $output_buffer);
+                // Leave the last partial line in buffer
+                $output_buffer = array_pop($lines);
+
+                foreach ($lines as $line) {
+                    // Count lines that contain "Extracting" and "OK"
+                    if (strpos($line, 'Extracting') !== false && strpos($line, 'OK') !== false) {
+                        $extracted_files++;
+                    }
+                }
+                // Calculate progress
+                $progress = $expected_files > 0 ? min(100, max(0, ($extracted_files / $expected_files) * 100)) : 0;
+                if ($progress !== $current_progress) {
+                    echo "\r" . create_progress_bar($progress, 100, PROGRESS_BAR_WIDTH, true);
+                    $current_progress = $progress;
+                }
+            }
+        } else {
+            echo "\r" . create_progress_bar($progress, 100, PROGRESS_BAR_WIDTH, true);
+            usleep(20000);
+        }
+    }
+
+    // Close pipes
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    
+    // Get return code
+    $return_code = proc_close($process);
+    
+    // Show completion
+    echo "\r" . create_progress_bar(100, 100, PROGRESS_BAR_WIDTH, false) . "\n";
     
     return $return_code === 0;
 }
@@ -3092,6 +3257,106 @@ function format_duration($seconds) {
     return implode(', ', $parts);
 }
 
+/**
+ * Check if terminal supports colors
+ * 
+ * @return bool True if colors are supported
+ */
+function supports_colors() {
+    return function_exists('posix_isatty') && posix_isatty(STDOUT);
+}
+
+/**
+ * Apply color to text if colors are supported
+ * 
+ * @param string $text Text to colorize
+ * @param string $color ANSI color code
+ * @return string Colored text or original text
+ */
+function colorize($text, $color) {
+    return supports_colors() ? $color . $text . COLOR_RESET : $text;
+}
+
+/**
+ * Print a formatted table row
+ * 
+ * @param array $columns Array of column values
+ * @param array $widths Array of column widths
+ * @param string $separator Column separator
+ * @return void
+ */
+function print_table_row($columns, $widths, $separator = '  ') {
+    $row = '';
+    foreach ($columns as $i => $column) {
+        $width = $widths[$i] ?? 20;
+        $row .= str_pad($column, $width) . $separator;
+    }
+    echo $row . "\n";
+}
+
+/**
+ * Print a header with styling
+ * 
+ * @param string $text Header text
+ * @param string $char Character to use for underline
+ * @param int $width Width of the header
+ * @return void
+ */
+function print_header($text, $char = '=', $width = 60) {
+    $text_length = strlen($text) + 4; // '  ' before and after
+    $line_length = max($width, $text_length);
+    $line = str_repeat($char, $line_length);
+
+    // Center the text within $line_length
+    $padding = $line_length - strlen($text);
+    $left = floor($padding / 2);
+    $right = $padding - $left;
+    $centered_text = str_repeat(' ', $left - 1) . $text . str_repeat(' ', $right - 1);
+
+    echo "\n" . colorize($line, COLOR_CYAN) . "\n";
+    echo colorize($centered_text, COLOR_BOLD . COLOR_CYAN) . "\n";
+    echo colorize($line, COLOR_CYAN) . "\n\n";
+}
+
+/**
+ * Print a success message
+ * 
+ * @param string $message Success message
+ * @return void
+ */
+function print_success($message) {
+    echo colorize("  $message", COLOR_GREEN) . "\n";
+}
+
+/**
+ * Print a warning message
+ * 
+ * @param string $message Warning message
+ * @return void
+ */
+function print_warning($message) {
+    echo colorize("  $message", COLOR_YELLOW) . "\n";
+}
+
+/**
+ * Print an error message
+ * 
+ * @param string $message Error message
+ * @return void
+ */
+function print_error($message) {
+    echo colorize("  $message", COLOR_RED) . "\n";
+}
+
+/**
+ * Print an info message
+ * 
+ * @param string $message Info message
+ * @return void
+ */
+function print_info($message) {
+    echo colorize("  $message", COLOR_CYAN) . "\n";
+}
 
 
 
