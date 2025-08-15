@@ -1,9 +1,9 @@
-# BitFreeze Backup System
+# BitFreeze Repository & Versioned Backup System
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![PHP](https://img.shields.io/badge/PHP-7.0+-blue.svg)](https://php.net/)
 
-**Advanced Backup System with Content Aware Deduplication and Recovery**
+**Advanced Repository & Versioned Backup System with Content Aware Deduplication and Recovery**
 
 BitFreeze transforms the traditional RAR archive tool into a sophisticated, enterprise-grade repository and file management application. By layering content-aware deduplication, robust bitrot and corruption countermeasures, and powerful metadata tracking on top of standard RAR archives, BitFreeze brings features typically found only in dedicated version control or enterprise backup solutions to your command line. It stores each unique file content just once, saving immense storage space even as files are moved or reorganized, and also provides versioned snapshots, advanced AES-256 encryption, and automatic integrity checks.
 
@@ -584,6 +584,7 @@ php bitfreeze.php checkout 1 archive.rar /checkout/path --force-directory
 # Check symlink status during checkout
 php bitfreeze.php checkout 1 archive.rar /checkout/path
 # System will automatically fallback to directory creation if symlink fails
+```
 
 ### Performance Tips
 
@@ -636,7 +637,5 @@ For support, please:
 1. Check the troubleshooting section above
 2. Review existing issues on GitHub
 3. Create a new issue with detailed information
-
----
 
 **BitFreeze** - Intelligent backup with content-aware deduplication and enterprise-grade security.
