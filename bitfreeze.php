@@ -127,31 +127,173 @@ README);
  * Provides ANSI color codes and formatting utilities for beautiful output
  */
 
-// ANSI color codes
-define('COLOR_RESET', "\033[0m");
-define('COLOR_BOLD', "\033[1m");
-define('COLOR_DIM', "\033[2m");
-define('COLOR_UNDERLINE', "\033[4m");
-
-// Foreground colors
-define('COLOR_BLACK', "\033[30m");
-define('COLOR_RED', "\033[31m");
-define('COLOR_GREEN', "\033[32m");
-define('COLOR_YELLOW', "\033[33m");
-define('COLOR_BLUE', "\033[34m");
-define('COLOR_MAGENTA', "\033[35m");
-define('COLOR_CYAN', "\033[36m");
-define('COLOR_WHITE', "\033[37m");
-
-// Background colors
-define('COLOR_BG_BLACK', "\033[40m");
-define('COLOR_BG_RED', "\033[41m");
-define('COLOR_BG_GREEN', "\033[42m");
-define('COLOR_BG_YELLOW', "\033[43m");
-define('COLOR_BG_BLUE', "\033[44m");
-define('COLOR_BG_MAGENTA', "\033[45m");
-define('COLOR_BG_CYAN', "\033[46m");
-define('COLOR_BG_WHITE', "\033[47m");
+/**
+ * Display Manager Class
+ * 
+ * Centralized display functions and color management for terminal output.
+ * Consolidates all display-related functionality into a single, maintainable class.
+ */
+class DisplayManager {
+    // ANSI color codes
+    const COLOR_RESET = "\033[0m";
+    const COLOR_BOLD = "\033[1m";
+    const COLOR_DIM = "\033[2m";
+    const COLOR_UNDERLINE = "\033[4m";
+    
+    // Foreground colors
+    const COLOR_BLACK = "\033[30m";
+    const COLOR_RED = "\033[31m";
+    const COLOR_GREEN = "\033[32m";
+    const COLOR_YELLOW = "\033[33m";
+    const COLOR_BLUE = "\033[34m";
+    const COLOR_MAGENTA = "\033[35m";
+    const COLOR_CYAN = "\033[36m";
+    const COLOR_WHITE = "\033[37m";
+    
+    // Background colors
+    const COLOR_BG_BLACK = "\033[40m";
+    const COLOR_BG_RED = "\033[41m";
+    const COLOR_BG_GREEN = "\033[42m";
+    const COLOR_BG_YELLOW = "\033[43m";
+    const COLOR_BG_BLUE = "\033[44m";
+    const COLOR_BG_MAGENTA = "\033[45m";
+    const COLOR_BG_CYAN = "\033[46m";
+    const COLOR_BG_WHITE = "\033[47m";
+    
+    /**
+     * Check if the current terminal supports colors
+     * 
+     * @return bool True if colors are supported
+     */
+    private function supportsColors(): bool {
+        // Check if we're in a terminal and colors are supported
+        if (function_exists('posix_isatty') && !posix_isatty(STDOUT)) {
+            return false;
+        }
+        
+        // Check if NO_COLOR environment variable is set
+        if (getenv('NO_COLOR') !== false) {
+            return false;
+        }
+        
+        return true;
+    }
+    
+    /**
+     * Apply color formatting to text
+     * 
+     * @param string $text Text to colorize
+     * @param string $color Color code(s) to apply
+     * @return string Colored text or original text if colors not supported
+     */
+    public function colorize(string $text, string $color): string {
+        return $this->supportsColors() ? $color . $text . self::COLOR_RESET : $text;
+    }
+    
+    /**
+     * Print a formatted header with styling
+     * 
+     * @param string $text Header text
+     * @param string $char Character to use for underline
+     * @param int $width Width of the header
+     * @return void
+     */
+    public function header(string $text, string $char = '=', int $width = 60): void {
+        $text_length = strlen($text) + 4; // '  ' before and after
+        $line_length = max($width, $text_length);
+        $line = str_repeat($char, $line_length);
+        
+        // Center the text within $line_length
+        $padding = $line_length - strlen($text);
+        $left = floor($padding / 2);
+        $right = $padding - $left;
+        $centered_text = str_repeat(' ', $left - 1) . $text . str_repeat(' ', $right - 1);
+        
+        echo "\n" . $this->colorize($line, self::COLOR_CYAN) . "\n";
+        echo $this->colorize($centered_text, self::COLOR_BOLD . self::COLOR_CYAN) . "\n";
+        echo $this->colorize($line, self::COLOR_CYAN) . "\n\n";
+    }
+    
+    /**
+     * Print a success message
+     * 
+     * @param string $message Success message
+     * @return void
+     */
+    public function success(string $message): void {
+        echo $this->colorize("  $message", self::COLOR_GREEN) . "\n";
+    }
+    
+    /**
+     * Print a warning message
+     * 
+     * @param string $message Warning message
+     * @return void
+     */
+    public function warning(string $message): void {
+        echo $this->colorize("  $message", self::COLOR_YELLOW) . "\n";
+    }
+    
+    /**
+     * Print an error message
+     * 
+     * @param string $message Error message
+     * @return void
+     */
+    public function error(string $message): void {
+        echo $this->colorize("  $message", self::COLOR_RED) . "\n";
+    }
+    
+    /**
+     * Print an info message
+     * 
+     * @param string $message Info message
+     * @return void
+     */
+    public function info(string $message): void {
+        echo $this->colorize("  $message", self::COLOR_CYAN) . "\n";
+    }
+    
+    /**
+     * Print a formatted table row
+     * 
+     * @param array $columns Array of column values
+     * @param array $widths Array of column widths
+     * @param string $separator Column separator
+     * @return void
+     */
+    public function tableRow(array $columns, array $widths, string $separator = '  '): void {
+        $row = '';
+        foreach ($columns as $i => $column) {
+            $width = $widths[$i] ?? 20;
+            $row .= str_pad($column, $width) . $separator;
+        }
+        echo $row . "\n";
+    }
+    
+    /**
+     * Format manifest information for display
+     * 
+     * Converts manifest timestamp to readable format: "Commit ID mm/dd/yyyy hh:ii:ss AM/PM"
+     * 
+     * @param array $manifest Manifest array with 'id' and 'ts' keys
+     * @return string Formatted commit information
+     */
+    public function formatCommitDisplay(array $manifest): string {
+        if (!isset($manifest['id']) || !isset($manifest['ts'])) {
+            return "Unknown Commit";
+        }
+        
+        // Parse the timestamp (format: YYYY-MM-DD HH:MM:SS)
+        $timestamp = strtotime($manifest['ts']);
+        if ($timestamp === false) {
+            return "Commit {$manifest['id']} ({$manifest['ts']})";
+        }
+        
+        // Format as mm/dd/yyyy hh:ii:ss AM/PM
+        return "Commit " . $manifest['id'] . " " . date('m/d/Y h:i:s A', $timestamp);
+    }
+}
 
 if (!defined('STDIN')) {
     echo "NOTICE: STDIN not defined, using php://stdin\n";
@@ -340,13 +482,120 @@ function get_memory_usage() {
 }
 
 /**
- * Check if --low-priority flag is present
+ * Argument Handler Class
  * 
- * @return bool True if --low-priority is present
+ * Centralized argument parsing and validation for command line arguments.
+ * Eliminates redundancy in argument checking functions and provides
+ * consistent interface for argument access.
  */
-function has_low_priority_flag() {
-    global $argv;
-    return in_array('--low-priority', $argv);
+class ArgumentHandler {
+    private $argv;
+    private $cleaned_argv;
+    
+    public function __construct(array $argv = null) {
+        // If no argv provided, get it from global scope
+        if ($argv === null) {
+            global $argv;
+            $this->argv = $argv;
+        } else {
+            $this->argv = $argv;
+        }
+        $this->cleaned_argv = $this->clean_argv();
+    }
+    
+    /**
+     * Check if a specific argument exists
+     * 
+     * @param string $arg_name Argument name to check (e.g., '--follow-symlinks')
+     * @return bool True if argument is present
+     */
+    public function has(string $arg_name): bool {
+        return in_array($arg_name, $this->argv);
+    }
+    
+    /**
+     * Get the value of an argument (e.g., -p password)
+     * 
+     * @param string $arg_name Argument name to get value for
+     * @param mixed $default Default value if argument not found
+     * @return mixed Argument value or default
+     */
+    public function get(string $arg_name, $default = null) {
+        $index = array_search($arg_name, $this->argv);
+        if ($index !== false && isset($this->argv[$index + 1])) {
+            return $this->argv[$index + 1];
+        }
+        return $default;
+    }
+    
+    /**
+     * Get boolean flag value (e.g., --follow-symlinks)
+     * 
+     * @param string $flag_name Flag name to check
+     * @param bool $default Default value if flag not present
+     * @return bool True if flag is present, false otherwise
+     */
+    public function getFlag(string $flag_name, bool $default = false): bool {
+        return $this->has($flag_name) ? true : $default;
+    }
+    
+    /**
+     * Get count of cleaned arguments
+     * 
+     * @return int Number of arguments
+     */
+    public function getCount(): int {
+        return count($this->cleaned_argv);
+    }
+    
+    /**
+     * Get cleaned arguments array
+     * 
+     * @return array Cleaned arguments
+     */
+    public function getCleaned(): array {
+        return $this->cleaned_argv;
+    }
+    
+    /**
+     * Clean command line arguments by removing script name and command
+     * 
+     * @return array Cleaned arguments
+     */
+    private function clean_argv(): array {
+        $cleaned = [];
+        $skip_next = false;
+        
+        for ($i = 1; $i < count($this->argv); $i++) {
+            if ($skip_next) {
+                $skip_next = false;
+                continue;
+            }
+            
+            $arg = $this->argv[$i];
+            
+            if ($arg === '-p' && isset($this->argv[$i + 1])) {
+                $cleaned[] = $arg;
+                $cleaned[] = $this->argv[$i + 1];
+                $skip_next = true;
+            } else {
+                $cleaned[] = $arg;
+            }
+        }
+        
+        return $cleaned;
+    }
+    
+    /**
+     * Get cleaned arguments starting from index 0 (for backward compatibility)
+     * 
+     * @return array Cleaned arguments starting from index 0
+     */
+    public function getCleanedFromZero(): array {
+        $cleaned = $this->clean_argv();
+        // This should match the old clean_argv() behavior exactly
+        return $cleaned;
+    }
 }
 
 /**
@@ -355,7 +604,8 @@ function has_low_priority_flag() {
  * @return int Nice level to use (1 for default, 10 for --low-priority)
  */
 function get_nice_level() {
-    return has_low_priority_flag() ? 10 : 1;
+    $args = new ArgumentHandler();
+    return $args->getFlag('--low-priority') ? 10 : 1;
 }
 
 /**
@@ -923,62 +1173,9 @@ function get_password_with_detection($rarfile) {
  * 
  * @return array Cleaned command line arguments
  */
-function clean_argv() {
-    global $argv;
 
-    $cleaned    = [];
-    $skip_next  = false;
-    
-    for ($i = 0; $i < count($argv); $i++) {
-        if ($skip_next) {
-            $skip_next = false;
-            continue;
-        }
 
-        if ($argv[$i] === '-p') {
-            // Skip the next argument only if it's not another option
-            if (isset($argv[$i + 1]) && $argv[$i + 1][0] !== '-') {
-                $skip_next = true;
-            }
-            continue;
-        }
 
-        // Skip --low-priority flag
-        if ($argv[$i] === '--low-priority') {
-            continue;
-        }
-
-        $cleaned[] = $argv[$i];
-    }
-    
-    return $cleaned;
-}
-
-/**
- * Check if --follow-symlinks argument is present
- * 
- * Searches for the --follow-symlinks argument in the command line arguments.
- * 
- * @return bool True if --follow-symlinks is present
- */
-function has_follow_symlinks() {
-    global $argv;
-    
-    return in_array('--follow-symlinks', $argv);
-}
-
-/**
- * Check if --force-directory argument is present
- * 
- * Searches for the --force-directory argument in the command line arguments.
- * 
- * @return bool True if --force-directory is present
- */
-function has_force_directory() {
-    global $argv;
-    
-    return in_array('--force-directory', $argv);
-}
 
 /**
  * Create symlink manifest entry
@@ -1060,23 +1257,29 @@ if ($argc < 2) {
 }
 
 $cmd            = $argv[1];
-$cleaned_argv   = clean_argv();
+$args           = new ArgumentHandler();
 
 switch ($cmd) {
     case 'commit':
-        if (count($cleaned_argv) < 4 || count($cleaned_argv) > 7) usage();
-        $comment = count($cleaned_argv) >= 5 ? $cleaned_argv[4] : "Automated Commit";
-        $password = get_password_with_detection(get_absolute_path($cleaned_argv[3]));
-        commit($cleaned_argv[2], get_absolute_path($cleaned_argv[3]), $comment, $password);
+        if ($args->getCount() < 4 || $args->getCount() > 7) usage();
+        $cleaned = $args->getCleanedFromZero();
+        
+
+        
+        $comment = count($cleaned) >= 4 ? $cleaned[3] : "Automated Commit";
+        $password = get_password_with_detection(get_absolute_path($cleaned[2]));
+        commit($cleaned[1], get_absolute_path($cleaned[2]), $comment, $password);
         break;
     case 'list':
-        if (count($cleaned_argv) !== 3) usage();
-        $password = get_password_with_detection(get_absolute_path($cleaned_argv[2]));
-        list_versions(get_absolute_path($cleaned_argv[2]), $password);
+        if ($args->getCount() !== 3) usage();
+        $cleaned = $args->getCleanedFromZero();
+        $password = get_password_with_detection(get_absolute_path($cleaned[2]));
+        list_versions(get_absolute_path($cleaned[2]), $password);
         break;
     case 'checkout':
-        if (count($cleaned_argv) < 5 || count($cleaned_argv) > 6) usage();
-        $repository = get_absolute_path($cleaned_argv[3]);
+        if ($args->getCount() < 5 || $args->getCount() > 6) usage();
+        $cleaned = $args->getCleanedFromZero();
+        $repository = get_absolute_path($cleaned[3]);
         $password = get_password_with_detection($repository);
 
         // exit if archive is encrypted but no password provided
@@ -1085,24 +1288,27 @@ switch ($cmd) {
             echo "Use -p password to provide the password.\n";
             exit(1);
         }
-        checkout($cleaned_argv[2], $repository, $cleaned_argv[4], $password);
+        checkout($cleaned[2], $repository, $cleaned[4], $password);
         break;
     case 'diff':
-        if (count($cleaned_argv) !== 5) usage();
-        $password = get_password_with_detection(get_absolute_path($cleaned_argv[4]));
-        diff_versions($cleaned_argv[2], $cleaned_argv[3], get_absolute_path($cleaned_argv[4]), $password);
+        if ($args->getCount() !== 5) usage();
+        $cleaned = $args->getCleanedFromZero();
+        $password = get_password_with_detection(get_absolute_path($cleaned[4]));
+        diff_versions($cleaned[2], $cleaned[3], get_absolute_path($cleaned[4]), $password);
         break;
     case 'status':
-        if (count($cleaned_argv) < 4 || count($cleaned_argv) > 6) usage();
-        $password = get_password_with_detection(get_absolute_path($cleaned_argv[3]));
-        $include_meta = in_array('--include-meta', $cleaned_argv);
-        $include_checksum = in_array('--checksum', $cleaned_argv);
-        status($cleaned_argv[2], get_absolute_path($cleaned_argv[3]), $password, $include_meta, $include_checksum);
+        if ($args->getCount() < 4 || $args->getCount() > 6) usage();
+        $cleaned = $args->getCleanedFromZero();
+        $password = get_password_with_detection(get_absolute_path($cleaned[3]));
+        $include_meta = $args->getFlag('--include-meta');
+        $include_checksum = $args->getFlag('--checksum');
+        status($cleaned[2], get_absolute_path($cleaned[3]), $password, $include_meta, $include_checksum);
         break;
     case 'repair':
-        if (count($cleaned_argv) !== 3) usage();
-        $password = get_password_with_detection(get_absolute_path($cleaned_argv[2]));
-        repair(get_absolute_path($cleaned_argv[2]), $password);
+        if ($args->getCount() !== 3) usage();
+        $cleaned = $args->getCleanedFromZero();
+        $password = get_password_with_detection(get_absolute_path($cleaned[2]));
+        repair(get_absolute_path($cleaned[2]), $password);
         break;
     default:
         usage();
@@ -1242,13 +1448,15 @@ function commit($folder, $rarfile, $comment, $password = null) {
     $parent_dirs        = [];
     $total_size         = 0; // Track total size of all files processed
     $symlink_count      = 0;
-    $follow_symlinks    = has_follow_symlinks();
+    $args               = new ArgumentHandler();
+    $follow_symlinks    = $args->getFlag('--follow-symlinks');
     
     // Get archive size before backup for comparison
     $archive_size_before = get_archive_size($rarfile);
     
     echo "\n";
-    print_info("🔍 Scanning and calculating hashes. [$folder]");
+    $display = new DisplayManager();
+    $display->info("🔍 Scanning and calculating hashes. [$folder]");
 
     $processed_count = 0;
     foreach (scanDirGenerator($folder, $sudo_password) as $filepath) {
@@ -1369,13 +1577,13 @@ function commit($folder, $rarfile, $comment, $password = null) {
             $processed_count++;
 
             if ($file_count % 10 === 0) {
-                echo "\r" . colorize("  📁 Processed " . number_format($file_count) . " files...", COLOR_CYAN);
+                echo "\r" . $display->colorize("  📁 Processed " . number_format($file_count) . " files...", DisplayManager::COLOR_CYAN);
             }
         
         }
     }
 
-    echo "\r" . colorize("  📁 Processed " . number_format($file_count) . " files...", COLOR_CYAN);
+    echo "\r" . $display->colorize("  📁 Processed " . number_format($file_count) . " files...", DisplayManager::COLOR_CYAN);
     
     // Second pass: capture ALL directories with their metadata
     $all_dirs = [];
@@ -1400,10 +1608,10 @@ function commit($folder, $rarfile, $comment, $password = null) {
         echo "\n";
     }
 
-    print_success("✅ Scan complete!");
+    $display->success("✅ Scan complete!");
     
     // Display scan results in a table
-    print_header("SCAN RESULTS");
+    $display->header("SCAN RESULTS");
     
     $scan_data = [
         ['Files Scanned', number_format($file_count)],
@@ -1421,18 +1629,18 @@ function commit($folder, $rarfile, $comment, $password = null) {
     
     $widths = [25, 20];
     foreach ($scan_data as $row) {
-        print_table_row($row, $widths);
+        $display->tableRow($row, $widths);
     }
     
     if ($skipped_count > 0) {
         echo "\n";
-        print_warning("⚠️  Some files were skipped due to permission issues:");
+        $display->warning("⚠️  Some files were skipped due to permission issues:");
         foreach (array_slice($skipped_files, 0, 5) as $skipped_file) {
             $reason = $skipped_reasons[$skipped_file] ?? "Unknown reason";
-            echo colorize("    • $skipped_file ($reason)", COLOR_YELLOW) . "\n";
+            echo $display->colorize("    • $skipped_file ($reason)", DisplayManager::COLOR_YELLOW) . "\n";
         }
         if (count($skipped_files) > 5) {
-            echo colorize("    ... and " . (count($skipped_files) - 5) . " more", COLOR_YELLOW) . "\n";
+            echo $display->colorize("    ... and " . (count($skipped_files) - 5) . " more", DisplayManager::COLOR_YELLOW) . "\n";
         }
     }
 
@@ -1441,7 +1649,7 @@ function commit($folder, $rarfile, $comment, $password = null) {
     $current_manifest_content = implode("\n", $manifest) . "\n";
     
     if ($last_manifest && $last_manifest['content'] === $current_manifest_content) {
-        echo "Last Commit:      " . format_commit_display($last_manifest) . "\n";
+        echo "Last Commit:      " . $display->formatCommitDisplay($last_manifest) . "\n";
         echo "Comment:          $comment\n\n";
         echo "NOTE: No changes detected since last commit. Exiting.\n";
         
@@ -1484,7 +1692,7 @@ function commit($folder, $rarfile, $comment, $password = null) {
     // Count files to be archived for progress tracking
     $files_to_archive = count_files_to_archive($temp);
 
-    print_header("WRITING DATA");
+    $display->header("WRITING DATA");
     
     // Add nice level to RAR command
     $rar_cmd = add_nice_to_rar_command($rar_cmd);
@@ -1494,7 +1702,7 @@ function commit($folder, $rarfile, $comment, $password = null) {
     chdir($cwd);
 
     if (!$rar_success) {
-        print_error("❌ Failed to commit to RAR repository!");
+        $display->error("❌ Failed to commit to RAR repository!");
         exec('rm -rf ' . escapeshellarg($temp));
         exit(1);
     }
@@ -1508,7 +1716,7 @@ function commit($folder, $rarfile, $comment, $password = null) {
     $archive_size_after = get_archive_size($rarfile);
     $compression_stats = calculate_compression_stats($total_size, $archive_size_after);
 
-    print_header("COMMIT SUMMARY");
+    $display->header("COMMIT SUMMARY");
     
     $summary_data = [
         ['Commit ID', $snapshot_id],
@@ -1534,11 +1742,11 @@ function commit($folder, $rarfile, $comment, $password = null) {
     
     $widths = [25, 30];
     foreach ($summary_data as $row) {
-        print_table_row($row, $widths);
+        $display->tableRow($row, $widths);
     }
     
     // Display compression statistics
-    print_header("REPOSITORY SIZE & COMPRESSION");
+    $display->header("REPOSITORY SIZE & COMPRESSION");
     
     $compression_data = [
         ['Original Size', $compression_stats['original_formatted']],
@@ -1555,18 +1763,18 @@ function commit($folder, $rarfile, $comment, $password = null) {
     $compression_data[] = ['Compression Ratio', $compression_stats['ratio_formatted']];
     
     foreach ($compression_data as $row) {
-        print_table_row($row, $widths);
+        $display->tableRow($row, $widths);
     }
     
     if ($skipped_count > 0) {
         echo "\n";
-        print_warning("⚠️  Some files were skipped due to permission issues:");
+        $display->warning("⚠️  Some files were skipped due to permission issues:");
         foreach (array_slice($skipped_files, 0, 5) as $skipped_file) {
             $reason = $skipped_reasons[$skipped_file] ?? "Unknown reason";
-            echo colorize("    • $skipped_file ($reason)", COLOR_YELLOW) . "\n";
+            echo $display->colorize("    • $skipped_file ($reason)", DisplayManager::COLOR_YELLOW) . "\n";
         }
         if (count($skipped_files) > 5) {
-            echo colorize("    ... and " . (count($skipped_files) - 5) . " more", COLOR_YELLOW) . "\n";
+            echo $display->colorize("    ... and " . (count($skipped_files) - 5) . " more", DisplayManager::COLOR_YELLOW) . "\n";
         }
     }
 
@@ -1619,9 +1827,10 @@ function status($folder, $rarfile, $password = null, $include_meta = false, $inc
         exit(1);
     }
 
-    print_header("STATUS ANALYSIS");
-    print_info("🔍 Analyzing folder: $folder");
-    print_info("📦 Archive: $rarfile");
+    $display = new DisplayManager();
+    $display->header("STATUS ANALYSIS");
+    $display->info("🔍 Analyzing folder: $folder");
+    $display->info("📦 Archive: $rarfile");
 
     // Check if sudo permissions will be needed early
     $sudo_password = null;
@@ -1638,7 +1847,7 @@ function status($folder, $rarfile, $password = null, $include_meta = false, $inc
         exit(1);
     }
 
-    print_info("📋 Latest " . format_commit_display($latest_manifest));
+    $display->info("📋 Latest " . $display->formatCommitDisplay($latest_manifest));
 
     // Extract the latest manifest to temp
     $temp = sys_get_temp_dir() . '/rarrepo_status_' . uniqid(mt_rand(), true);
@@ -1769,44 +1978,44 @@ function status($folder, $rarfile, $password = null, $include_meta = false, $inc
     }
 
     // Display results
-    print_header("CHANGES DETECTED");
+    $display->header("CHANGES DETECTED");
 
     // New files
     if (!empty($new_files)) {
-        print_header("NEW FILES", "-", 50);
+        $display->header("NEW FILES", "-", 50);
         foreach ($new_files as $file) {
             echo "  + $file\n";
         }
     } else {
-        print_header("NEW FILES", "-", 50);
+        $display->header("NEW FILES", "-", 50);
         echo "  ✅ No new files\n";
     }
 
     // Modified files
     if (!empty($modified_files)) {
-        print_header("MODIFIED FILES", "-", 50);
+        $display->header("MODIFIED FILES", "-", 50);
         foreach ($modified_files as $file) {
             echo "  ~ $file\n";
         }
     } else {
-        print_header("MODIFIED FILES", "-", 50);
+        $display->header("MODIFIED FILES", "-", 50);
         echo "  ✅ No modified files\n";
     }
 
     // Deleted files
     if (!empty($deleted_files)) {
-        print_header("DELETED FILES", "-", 50);
+        $display->header("DELETED FILES", "-", 50);
         foreach ($deleted_files as $file) {
             echo "  - $file\n";
         }
     } else {
-        print_header("DELETED FILES", "-", 50);
+        $display->header("DELETED FILES", "-", 50);
         echo "  ✅ No deleted files\n";
     }
 
     // Metadata changes
     if ($include_meta && !empty($meta_changed_files)) {
-        print_header("METADATA CHANGES", "-", 50);
+        $display->header("METADATA CHANGES", "-", 50);
         foreach ($meta_changed_files as $change) {
             echo "  🔄 {$change['path']}\n";
             
@@ -1825,7 +2034,7 @@ function status($folder, $rarfile, $password = null, $include_meta = false, $inc
             echo "\n";
         }
     } elseif ($include_meta) {
-        print_header("METADATA CHANGES", "-", 50);
+        $display->header("METADATA CHANGES", "-", 50);
         echo "  ✅ No metadata changes\n";
     }
 
@@ -1840,24 +2049,24 @@ function status($folder, $rarfile, $password = null, $include_meta = false, $inc
         $right = $padding - $left;
         $centered_text = str_repeat(' ', $left - 1) . $header_text . str_repeat(' ', $right - 1);
         
-        echo "\n" . colorize($line, COLOR_RED) . "\n";
-        echo colorize($centered_text, COLOR_BOLD . COLOR_RED) . "\n";
-        echo colorize($line, COLOR_RED) . "\n\n";
+        echo "\n" . $display->colorize($line, DisplayManager::COLOR_RED) . "\n";
+        echo $display->colorize($centered_text, DisplayManager::COLOR_BOLD . DisplayManager::COLOR_RED) . "\n";
+        echo $display->colorize($line, DisplayManager::COLOR_RED) . "\n\n";
         
-        print_warning("⚠️  Files with changed content but unchanged modification dates:");
+        $display->warning("⚠️  Files with changed content but unchanged modification dates:");
         foreach ($checksum_changed_files as $change) {
-            echo colorize("  🔍 {$change['path']}", COLOR_YELLOW) . "\n";
-            echo colorize("     Current Hash: {$change['current_hash']}", COLOR_YELLOW) . "\n";
-            echo colorize("     Archive Hash: {$change['archive_hash']}", COLOR_YELLOW) . "\n";
-            echo colorize("     Modification Date: " . date('Y-m-d H:i:s', $change['mtime']), COLOR_YELLOW) . "\n\n";
+            echo $display->colorize("  🔍 {$change['path']}", DisplayManager::COLOR_YELLOW) . "\n";
+            echo $display->colorize("     Current Hash: {$change['current_hash']}", DisplayManager::COLOR_YELLOW) . "\n";
+            echo $display->colorize("     Archive Hash: {$change['archive_hash']}", DisplayManager::COLOR_YELLOW) . "\n";
+            echo $display->colorize("     Modification Date: " . date('Y-m-d H:i:s', $change['mtime']), DisplayManager::COLOR_YELLOW) . "\n\n";
         }
     } elseif ($include_checksum) {
-        print_header("CHECKSUM CHANGES", "!", 50);
+        $display->header("CHECKSUM CHANGES", "!", 50);
         echo "  ✅ No checksum changes detected\n";
     }
 
     // Summary
-    print_header("SUMMARY");
+    $display->header("SUMMARY");
     $summary_data = [
         ['New Files', count($new_files)],
         ['Modified Files', count($modified_files)],
@@ -1876,7 +2085,7 @@ function status($folder, $rarfile, $password = null, $include_meta = false, $inc
     
     $widths = [20, 10];
     foreach ($summary_data as $row) {
-        print_table_row($row, $widths);
+        $display->tableRow($row, $widths);
     }
 
     // Clean up
@@ -2122,9 +2331,11 @@ function checkout($snapshot_id, $rarfile, $outdir, $password = null) {
     $parent = dirname($outdir);
 
     $encrypted      = is_archive_encrypted($rarfile) ? 'ENCRYPTED' : '';
-    $low_priority   = has_low_priority_flag() ? 'LOW PRIORITY' : '';
+    $args           = new ArgumentHandler();
+    $low_priority   = $args->getFlag('--low-priority') ? 'LOW PRIORITY' : '';
 
-    print_header("CHECKOUT $encrypted COMMIT $snapshot_id $low_priority");
+    $display = new DisplayManager();
+    $display->header("CHECKOUT $encrypted COMMIT $snapshot_id $low_priority");
 
     if (!is_writable($parent)) {
         echo "ERROR: Cannot checkout to $outdir: Permission denied\n";
@@ -2231,7 +2442,8 @@ function checkout($snapshot_id, $rarfile, $outdir, $password = null) {
             // Enhanced symlink handling with fallback to directory
             $link_path  = rtrim($outdir, '/') . '/' . $entry['path'];
             $link_dir   = dirname($link_path);
-            $force_dir  = has_force_directory();
+            $args = new ArgumentHandler();
+            $force_dir  = $args->getFlag('--force-directory');
 
             if (!is_dir($link_dir)) {
                 mkdir($link_dir, 0755, true);
@@ -2259,7 +2471,7 @@ function checkout($snapshot_id, $rarfile, $outdir, $password = null) {
 
                 if (symlink_exists_and_points_to($link_path, $entry['target'])) {
                     $symlink_created = true;
-                    print_success("✅ Symlink created: {$entry['path']} -> {$entry['target']}");
+                    $display->success("✅ Symlink created: {$entry['path']} -> {$entry['target']}");
                 }
             }
 
@@ -2292,10 +2504,10 @@ function checkout($snapshot_id, $rarfile, $outdir, $password = null) {
             if (!$symlink_created) {
                 // Symlink creation failed or --force-directory was used
                 if ($force_dir) {
-                    print_warning("⚠️  Force directory mode: Creating directory instead of symlink for {$entry['path']}");
+                    $display->warning("⚠️  Force directory mode: Creating directory instead of symlink for {$entry['path']}");
                 } else {
-                    print_warning("⚠️  Symlink creation failed for {$entry['path']} -> {$entry['target']}");
-                    print_warning("   Falling back to directory creation. Files will be restored directly.");
+                    $display->warning("⚠️  Symlink creation failed for {$entry['path']} -> {$entry['target']}");
+                    $display->warning("   Falling back to directory creation. Files will be restored directly.");
                 }
                 
                 // Create directory for file restoration
@@ -2345,8 +2557,8 @@ function checkout($snapshot_id, $rarfile, $outdir, $password = null) {
     // Add nice level to RAR command
     $rar_cmd = add_nice_to_rar_command($rar_cmd);
 
-    print_header("READING DATA");
-    echo colorize("⏳ Please wait...", COLOR_CYAN) . "\n";
+    $display->header("READING DATA");
+    echo $display->colorize("⏳ Please wait...", DisplayManager::COLOR_CYAN) . "\n";
 
     // Execute RAR extraction with progress tracking
     $code2 = execute_rar_extract_with_progress($rar_cmd, count($all_hashes)) ? 0 : 1;
@@ -2463,7 +2675,7 @@ function checkout($snapshot_id, $rarfile, $outdir, $password = null) {
     // Clean up
     exec('rm -rf ' . escapeshellarg($temp));
 
-    print_header("SUMMARY");
+    $display->header("SUMMARY");
 
     echo "Files checked out: " . number_format($restored) . " / " . number_format($count) . "\n";
 
@@ -2471,7 +2683,7 @@ function checkout($snapshot_id, $rarfile, $outdir, $password = null) {
         echo "Errors: " . number_format($errors) . "\n";
     }
 
-    echo colorize("All operations completed successfully", COLOR_GREEN) . "\n";
+    echo $display->colorize("All operations completed successfully", DisplayManager::COLOR_GREEN) . "\n";
 
     // Display resource usage summary
     // print_header("RESOURCE USAGE");
@@ -2871,7 +3083,8 @@ function get_file_md5($filepath, $sudo_password = null) {
         
         if ($code === 124) {
             // Command timed out
-            print_error("⚠️  MD5 calculation timed out for: $filepath");
+            $display = new DisplayManager();
+            $display->error("⚠️  MD5 calculation timed out for: $filepath");
             return false;
         } elseif ($code === 0 && !empty($output[0])) {
             return trim($output[0]);
@@ -3159,8 +3372,9 @@ function create_progress_bar($current, $total, $width = PROGRESS_BAR_WIDTH, $spi
     $filled = round(($width * $percentage) / 100);
     $empty = $width - $filled;
     
-    $bar = colorize(str_repeat('█', $filled), COLOR_GREEN);
-    $bar .= colorize(str_repeat('░', $empty), COLOR_DIM);
+    $display = new DisplayManager();
+    $bar = $display->colorize(str_repeat('█', $filled), DisplayManager::COLOR_GREEN);
+    $bar .= $display->colorize(str_repeat('░', $empty), DisplayManager::COLOR_DIM);
     
     $spinner = '';
     if ($spinning && $percentage < 100) {
@@ -3183,7 +3397,8 @@ function create_progress_bar($current, $total, $width = PROGRESS_BAR_WIDTH, $spi
 function execute_rar_with_progress($rar_cmd, $total_files) {
     // Start progress display
     $encryption_status = strpos($rar_cmd, ' -hp') !== false ? "encrypted " : "";
-    echo colorize("📦 Saving {$encryption_status}data to repository...", COLOR_CYAN) . "\n";
+    $display = new DisplayManager();
+    echo $display->colorize("📦 Saving {$encryption_status}data to repository...", DisplayManager::COLOR_CYAN) . "\n";
     
     // Execute RAR command and monitor output for progress
     $start_time     = microtime(true);
@@ -3413,132 +3628,6 @@ function format_duration($seconds) {
 
     return implode(', ', $parts);
 }
-
-/**
- * Check if terminal supports colors
- * 
- * @return bool True if colors are supported
- */
-function supports_colors() {
-    return function_exists('posix_isatty') && posix_isatty(STDOUT);
-}
-
-/**
- * Apply color to text if colors are supported
- * 
- * @param string $text Text to colorize
- * @param string $color ANSI color code
- * @return string Colored text or original text
- */
-function colorize($text, $color) {
-    return supports_colors() ? $color . $text . COLOR_RESET : $text;
-}
-
-/**
- * Print a formatted table row
- * 
- * @param array $columns Array of column values
- * @param array $widths Array of column widths
- * @param string $separator Column separator
- * @return void
- */
-function print_table_row($columns, $widths, $separator = '  ') {
-    $row = '';
-    foreach ($columns as $i => $column) {
-        $width = $widths[$i] ?? 20;
-        $row .= str_pad($column, $width) . $separator;
-    }
-    echo $row . "\n";
-}
-
-/**
- * Format manifest information for display
- * 
- * Converts manifest timestamp to readable format: "Commit ID mm/dd/yyyy hh:ii:ss AM/PM"
- * 
- * @param array $manifest Manifest array with 'id' and 'ts' keys
- * @return string Formatted commit information
- */
-function format_commit_display($manifest) {
-    if (!isset($manifest['id']) || !isset($manifest['ts'])) {
-        return "Unknown Commit";
-    }
-    
-    // Parse the timestamp (format: YYYY-MM-DD HH:MM:SS)
-    $timestamp = strtotime($manifest['ts']);
-    if ($timestamp === false) {
-        return "Commit {$manifest['id']} ({$manifest['ts']})";
-    }
-    
-    // Format as mm/dd/yyyy hh:ii:ss AM/PM
-    return "Commit " . $manifest['id'] . " " . date('m/d/Y h:i:s A', $timestamp);
-}
-
-/**
- * Print a header with styling
- * 
- * @param string $text Header text
- * @param string $char Character to use for underline
- * @param int $width Width of the header
- * @return void
- */
-function print_header($text, $char = '=', $width = 60) {
-    $text_length    = strlen($text) + 4; // '  ' before and after
-    $line_length    = max($width, $text_length);
-    $line           = str_repeat($char, $line_length);
-
-    // Center the text within $line_length
-    $padding        = $line_length - strlen($text);
-    $left           = floor($padding / 2);
-    $right          = $padding - $left;
-    $centered_text  = str_repeat(' ', $left - 1) . $text . str_repeat(' ', $right - 1);
-
-    echo "\n" . colorize($line, COLOR_CYAN) . "\n";
-    echo colorize($centered_text, COLOR_BOLD . COLOR_CYAN) . "\n";
-    echo colorize($line, COLOR_CYAN) . "\n\n";
-}
-
-/**
- * Print a success message
- * 
- * @param string $message Success message
- * @return void
- */
-function print_success($message) {
-    echo colorize("  $message", COLOR_GREEN) . "\n";
-}
-
-/**
- * Print a warning message
- * 
- * @param string $message Warning message
- * @return void
- */
-function print_warning($message) {
-    echo colorize("  $message", COLOR_YELLOW) . "\n";
-}
-
-/**
- * Print an error message
- * 
- * @param string $message Error message
- * @return void
- */
-function print_error($message) {
-    echo colorize("  $message", COLOR_RED) . "\n";
-}
-
-/**
- * Print an info message
- * 
- * @param string $message Info message
- * @return void
- */
-function print_info($message) {
-    echo colorize("  $message", COLOR_CYAN) . "\n";
-}
-
-
 
 
 
