@@ -145,6 +145,11 @@ Files are stored as content hashes in 'files/' and snapshot manifests in 'versio
 Comments are stored as .comment files alongside manifests.
 README);
 
+if (!defined('STDIN')) {
+    echo "NOTICE: STDIN not defined, using php://stdin\n";
+    define('STDIN', fopen('php://stdin', 'r'));
+}
+
 /**
  * Check for required PHP functions and exit if any are missing
  * 
@@ -247,11 +252,17 @@ function check_required_functions() {
  * @return string Formatted size string
  */
 function format_file_size($bytes, $precision = 2) {
-    $units = ['Bytes', 'KiloBytes', 'MegaBytes', 'GigaBytes', 'TeraBytes', 'PetaBytes'];
-    $thresholds = [1024, 1024*1024, 1024*1024*1024, 1024*1024*1024*1024, 1024*1024*1024*1024*1024];
+    static $units = ['Bytes', 'KiloBytes', 'MegaBytes', 'GigaBytes', 'TeraBytes', 'PetaBytes'];
+    static $thresholds = [
+        1024,              // 1024
+        pow(1024, 2),      // 1024*1024
+        pow(1024, 3),      // 1024*1024*1024
+        pow(1024, 4),      // 1024*1024*1024*1024
+        pow(1024, 5),      // 1024*1024*1024*1024*1024
+    ];
     
     // For very small sizes, just show bytes
-    if ($bytes < 2000) {
+    if ($bytes < 1024) {
         return number_format($bytes) . ' Bytes';
     }
     
@@ -290,37 +301,33 @@ function parse_memory_limit($memory_limit) {
     $last = strtolower($memory_limit[strlen($memory_limit) - 1]);
     $value = (int)substr($memory_limit, 0, -1);
     
+    // Fallthrough switch, for 'G', multiply by 1024 three times; for 'M', twice; for 'K', once. (Converts to bytes)
     switch ($last) {
-        case 'g':
-            $value *= 1024;
-        case 'm':
-            $value *= 1024;
-        case 'k':
-            $value *= 1024;
+        case 'g': $value *= 1024;
+        case 'm': $value *= 1024;
+        case 'k': $value *= 1024;
     }
     
     return $value;
 }
 
 /**
- * Get current memory usage statistics
+ * Get memory usage statistics
  * 
  * @return array Memory usage data
  */
 function get_memory_usage() {
-    $memory_limit = ini_get('memory_limit');
-    $memory_usage = memory_get_usage(true);
-    $memory_peak = memory_get_peak_usage(true);
+    $memory_usage   = memory_get_usage(true);
     
-    // Convert memory_limit to bytes
-    $limit_bytes = parse_memory_limit($memory_limit);
+    // memory_limit in bytes
+    $limit_bytes    = parse_memory_limit(ini_get('memory_limit'));
     
     return [
-        'current' => $memory_usage,
-        'peak' => $memory_peak,
-        'limit' => $limit_bytes,
-        'percentage' => $limit_bytes > 0 ? ($memory_usage / $limit_bytes) * 100 : 0,
-        'available' => $limit_bytes > 0 ? $limit_bytes - $memory_usage : 0
+        'current'       => $memory_usage,
+        'peak'          => memory_get_peak_usage(true),
+        'limit'         => $limit_bytes,
+        'percentage'    => $limit_bytes > 0 ? ($memory_usage / $limit_bytes) * 100 : 0,
+        'available'     => $limit_bytes > 0 ? $limit_bytes - $memory_usage : 0
     ];
 }
 
@@ -339,7 +346,7 @@ function has_low_priority_flag() {
  * 
  * @return int Nice level to use (1 for default, 10 for --low-priority)
  */
-function get_nice_level_for_backup() {
+function get_nice_level() {
     return has_low_priority_flag() ? 10 : 1;
 }
 
@@ -350,8 +357,7 @@ function get_nice_level_for_backup() {
  * @return string RAR command with nice level
  */
 function add_nice_to_rar_command($rar_cmd) {
-    $nice_level = get_nice_level_for_backup();
-    return "nice -n $nice_level $rar_cmd";
+    return "nice -n " . get_nice_level() . " $rar_cmd";
 }
 
 /**
@@ -364,137 +370,69 @@ function add_nice_to_rar_command($rar_cmd) {
  * @return array Array containing metadata fields
  */
 function get_file_metadata($filepath, $sudo_password = null) {
-    // Check if file exists and is accessible
-    if (!file_exists($filepath) || !is_readable($filepath)) {
-        // If sudo is available, try to check with sudo
-        if ($sudo_password !== null) {
-            $escaped_filepath = escapeshellarg($filepath);
-            $command = "test -r $escaped_filepath";
-            
-            $output = [];
-            exec("timeout 600 printf '%s\n' " . escapeshellarg($sudo_password) . " | sudo -p '' -S $command 2>/dev/null", $output, $code);
-            if ($code !== 0) {
-                echo "MANIFEST ERROR: File $filepath does not exist or is not readable (even with sudo)\n";
-                // Return default metadata for inaccessible files
-                return [
-                    'permissions' => '0644',
-                    'owner' => 'unknown',
-                    'group' => 'unknown',
-                    'mtime' => time(),
-                    'atime' => time(),
-                    'ctime' => time(),
-                    'size' => 0
+    // Try to stat() normally
+    $stat = @stat($filepath);
+
+    // If that fails and sudo is available, try stat via sudo
+    if ($stat === false && $sudo_password !== null) {
+        $escaped_filepath = escapeshellarg($filepath);
+        $command = "stat -c '%a %u %g %Y %X %Z %s' $escaped_filepath";
+        $output = [];
+        exec("timeout 10 printf '%s\n' " . escapeshellarg($sudo_password) . " | sudo -p '' -S $command 2>/dev/null", $output, $code);
+        if ($code === 0 && !empty($output[0])) {
+            $parts = explode(' ', trim($output[0]));
+            if (count($parts) >= 7) {
+                $stat = [
+                    'mode'  => octdec($parts[0]),
+                    'uid'   => (int)$parts[1],
+                    'gid'   => (int)$parts[2],
+                    'mtime' => (int)$parts[3],
+                    'atime' => (int)$parts[4],
+                    'ctime' => (int)$parts[5],
+                    'size'  => (int)$parts[6]
                 ];
             }
-        } else {
-            echo "MANIFEST ERROR: File $filepath does not exist or is not readable\n";
-            // Return default metadata for inaccessible files
-            return [
-                'permissions' => '0644',
-                'owner' => 'unknown',
-                'group' => 'unknown',
-                'mtime' => time(),
-                'atime' => time(),
-                'ctime' => time(),
-                'size' => 0
-            ];
         }
     }
-    
-    $stat = @stat($filepath);
+
+    // If still nothing, error/default
     if ($stat === false) {
-        // If sudo is available, try to get stat with sudo
-        if ($sudo_password !== null) {
-            $escaped_filepath = escapeshellarg($filepath);
-            $command = "stat -c '%a %u %g %Y %X %Z %s' $escaped_filepath";
-            
-            $output = [];
-            exec("timeout 600 printf '%s\n' " . escapeshellarg($sudo_password) . " | sudo -p '' -S $command 2>/dev/null", $output, $code);
-            if ($code === 0 && !empty($output[0])) {
-                $parts = explode(' ', trim($output[0]));
-                if (count($parts) >= 7) {
-                    $stat = [
-                        'mode' => octdec($parts[0]),
-                        'uid' => (int)$parts[1],
-                        'gid' => (int)$parts[2],
-                        'mtime' => (int)$parts[3],
-                        'atime' => (int)$parts[4],
-                        'ctime' => (int)$parts[5],
-                        'size' => (int)$parts[6]
-                    ];
-                }
-            }
-        }
-        
-        if ($stat === false) {
-            // Return default metadata if stat fails
-            return [
-                'permissions' => '0644',
-                'owner' => 'unknown',
-                'group' => 'unknown',
-                'mtime' => time(),
-                'atime' => time(),
-                'ctime' => time(),
-                'size' => 0
-            ];
-        }
+        echo "\nMANIFEST ERROR: File $filepath does not exist or is not readable";
+        if ($sudo_password !== null) echo " (sudo)";
+        echo "\n";
+        return [
+            'permissions'   => '0644',
+            'owner'         => 'unknown',
+            'group'         => 'unknown',
+            'mtime'         => time(),
+            'atime'         => time(),
+            'ctime'         => time(),
+            'size'          => 0
+        ];
     }
-    
-    // Get permissions (octal format) with error handling
-    $permissions = '0644'; // Default
-    $perms_result = @fileperms($filepath);
-    if ($perms_result !== false) {
-        $permissions = substr(sprintf('%o', $perms_result), -4);
-    }
-    
-    // Get owner and group names (fallback to IDs if names not available)
-    $owner_id = 'unknown';
-    $group_id = 'unknown';
-    
-    $owner_result = @fileowner($filepath);
-    if ($owner_result !== false) {
-        $owner_id = $owner_result;
-    }
-    
-    $group_result = @filegroup($filepath);
-    if ($group_result !== false) {
-        $group_id = $group_result;
-    }
-    
-    // If we got stat data via sudo, use that instead of trying to get permissions/owner/group
-    // since the current user might not have access to those functions
-    if (isset($stat['mode'])) {
-        $permissions = substr(sprintf('%o', $stat['mode']), -4);
-        $owner_id = $stat['uid'];
-        $group_id = $stat['gid'];
-    }
-    
-    // Try to get names, fallback to IDs
-    $owner = $owner_id;
-    $group = $group_id;
-    
-    if (function_exists('posix_getpwuid') && is_numeric($owner_id)) {
-        $owner_info = posix_getpwuid((int)$owner_id);
-        if ($owner_info !== false) {
-            $owner = $owner_info['name'];
-        }
-    }
-    
-    if (function_exists('posix_getgrgid') && is_numeric($group_id)) {
-        $group_info = posix_getgrgid((int)$group_id);
-        if ($group_info !== false) {
-            $group = $group_info['name'];
-        }
-    }
-    
+
+    // Metadata
+    $permissions = substr(sprintf('%o', isset($stat['mode']) ? $stat['mode'] : @fileperms($filepath)), -4);
+
+    $owner_id = isset($stat['uid']) ? $stat['uid'] : @fileowner($filepath);
+    $group_id = isset($stat['gid']) ? $stat['gid'] : @filegroup($filepath);
+
+    $owner = (is_numeric($owner_id) && function_exists('posix_getpwuid')) ?
+        (posix_getpwuid($owner_id)['name'] ?? $owner_id) :
+        ($owner_id !== false ? $owner_id : 'unknown');
+
+    $group = (is_numeric($group_id) && function_exists('posix_getgrgid')) ?
+        (posix_getgrgid($group_id)['name'] ?? $group_id) :
+        ($group_id !== false ? $group_id : 'unknown');
+
     return [
-        'permissions' => $permissions,
-        'owner' => $owner,
-        'group' => $group,
-        'mtime' => $stat['mtime'],
-        'atime' => $stat['atime'],
-        'ctime' => $stat['ctime'],
-        'size' => $stat['size']
+        'permissions'   => $permissions,
+        'owner'         => $owner,
+        'group'         => $group,
+        'mtime'         => $stat['mtime'],
+        'atime'         => $stat['atime'],
+        'ctime'         => $stat['ctime'],
+        'size'          => $stat['size']
     ];
 }
 
@@ -578,19 +516,16 @@ function parse_manifest_entry($line) {
         'hash' => $parts[1]
     ];
     
-    // Check if this is the new format with metadata (9 parts including size)
-    if (count($parts) >= 9) {
-        $entry['metadata'] = [
-            'permissions' => $parts[2],
-            'owner' => $parts[3],
-            'group' => $parts[4],
-            'mtime' => (int)$parts[5],
-            'atime' => (int)$parts[6],
-            'ctime' => (int)$parts[7],
-            'size' => (int)$parts[8]
-        ];
-    }
-    
+    $entry['metadata'] = [
+        'permissions'   => $parts[2],
+        'owner'         => $parts[3],
+        'group'         => $parts[4],
+        'mtime'         => (int)$parts[5],
+        'atime'         => (int)$parts[6],
+        'ctime'         => (int)$parts[7],
+        'size'          => (int)$parts[8]
+    ];
+
     return $entry;
 }
 
@@ -620,8 +555,16 @@ function can_elevate_privileges() {
  * 
  * @return string|null The sudo password or null if cancelled
  */
-function prompt_for_sudo_password() {
-    echo "Access to some files/folders is restricted and requires root privileges.\n";
+function prompt_for_sudo_password($msg_type = 'read') {
+    switch ($msg_type) {
+        case 'read':
+            echo "Access to some files/folders is restricted and requires root privileges.\n";
+            break;
+        case 'write':
+            echo "Restoring ownership and permissions requires root privileges.\n";
+            break;
+    }
+
     echo "Enter your sudo password to continue (or press Enter to skip): ";
     
     // Hide input for security (only if we're in an interactive terminal)
@@ -653,12 +596,11 @@ function prompt_for_sudo_password() {
  * @return bool True if successful, false otherwise
  */
 function execute_with_sudo($command, $password) {
-    $escaped_command = escapeshellarg($command);
-    $escaped_password = escapeshellarg($password);
+    $escaped_password   = escapeshellarg($password);
     
     // Use printf to pipe password to sudo without triggering the prompt
     // The -p option with empty string suppresses the prompt
-    $full_command = "printf '%s\n' $escaped_password | sudo -p '' -S $escaped_command 2>/dev/null";
+    $full_command = "printf '%s\n' $escaped_password | sudo -p '' -S $command 2>/dev/null";
     
     exec($full_command, $output, $code);
     return $code === 0;
@@ -679,12 +621,22 @@ function execute_with_sudo($command, $password) {
 function restore_file_with_metadata($source, $dest, $metadata, $sudo_password = null) {
     // Copy file content
     if (!copy($source, $dest)) {
-        return false;
+        // Try with sudo, if password is available
+        if ($sudo_password !== null) {
+            $copy_cmd = "cp " . escapeshellarg($source) . " " . escapeshellarg($dest);
+            if (!execute_with_sudo($copy_cmd, $sudo_password)) {
+                echo "Notice: Failed to restore [{$dest}] (sudo)\n";
+                return false; // sudo copy also failed
+            }
+        } else {
+            echo "Notice: Failed to restore [{$dest}]\n";
+            return false; // no sudo password, cannot proceed
+        }
     }
-    
+
     // Restore permissions
     if (isset($metadata['permissions'])) {
-        chmod($dest, octdec($metadata['permissions']));
+        @chmod($dest, octdec($metadata['permissions']));
     }
     
     // Restore ownership (only if running as root or sudo password provided)
@@ -697,7 +649,7 @@ function restore_file_with_metadata($source, $dest, $metadata, $sudo_password = 
                 (function_exists('posix_getpwnam') ? posix_getpwnam($metadata['owner'])['uid'] : null);
             if ($owner_id !== null) {
                 if ($is_root) {
-                    chown($dest, $owner_id);
+                    @chown($dest, $owner_id);
                 } else {
                     execute_with_sudo("chown $owner_id " . escapeshellarg($dest), $sudo_password);
                 }
@@ -710,7 +662,7 @@ function restore_file_with_metadata($source, $dest, $metadata, $sudo_password = 
                 (function_exists('posix_getgrnam') ? posix_getgrnam($metadata['group'])['gid'] : null);
             if ($group_id !== null) {
                 if ($is_root) {
-                    chgrp($dest, $group_id);
+                    @chgrp($dest, $group_id);
                 } else {
                     execute_with_sudo("chgrp $group_id " . escapeshellarg($dest), $sudo_password);
                 }
@@ -720,7 +672,7 @@ function restore_file_with_metadata($source, $dest, $metadata, $sudo_password = 
     
     // Restore timestamps
     if (isset($metadata['mtime']) && isset($metadata['atime'])) {
-        touch($dest, $metadata['mtime'], $metadata['atime']);
+        @touch($dest, $metadata['mtime'], $metadata['atime']);
     }
     
     return true;
@@ -742,22 +694,37 @@ function usage() {
 }
 
 /**
- * Get absolute path for RAR file
+ * Get absolute path for a given file path
  * 
- * Handles both relative and absolute paths for RAR files.
+ * Handles both relative and absolute paths.
  * Relative paths are made absolute from current directory.
  * 
- * @param string $rarfile RAR file path
- * @return string Absolute path to RAR file
+ * @param string $path File path
+ * @return string Absolute path to file
  */
-function get_rar_absolute_path($rarfile) {
-    if (pathinfo($rarfile, PATHINFO_DIRNAME) === '.') {
-        // Relative path - make it absolute from current directory
-        return realpath('.') . '/' . $rarfile;
-    } else {
-        // Absolute path or path with directory - use as is
-        return realpath($rarfile) ?: $rarfile;
+function get_absolute_path($path) {
+    // If already absolute (Unix or Windows), return as is
+    if (
+        strpos($path, DIRECTORY_SEPARATOR) === 0 || // Unix
+        preg_match('/^[A-Za-z]:[\/\\\\]/', $path)   // Windows
+    ) {
+        return $path;
     }
+    
+    // Resolve ".." and "." segments in the path
+    $fullPath   = getcwd() . DIRECTORY_SEPARATOR . $path;
+    $parts      = []; // Array to build a new absolute path
+
+    foreach (explode(DIRECTORY_SEPARATOR, $fullPath) as $part) {
+        if ($part === '' || $part === '.') continue;
+        if ($part === '..') {
+            array_pop($parts);
+        } else {
+            $parts[] = $part;
+        }
+    }
+
+    return DIRECTORY_SEPARATOR . implode(DIRECTORY_SEPARATOR, $parts);
 }
 
 /**
@@ -778,12 +745,13 @@ function get_password() {
             if (isset($argv[$i + 1]) && $argv[$i + 1][0] !== '-') {
                 return $argv[$i + 1];
             }
-            // If -p is provided without a value, return null to trigger detection
+
+            // If -p is provided without a value, return null
             return null;
         }
     }
     
-    return null; // No password provided
+    return null;
 }
 
 /**
@@ -826,20 +794,18 @@ function prompt_for_encryption_password() {
  * @return bool True if archive is encrypted, false otherwise
  */
 function is_archive_encrypted($rarfile) {
-    $rarfile_abs = get_rar_absolute_path($rarfile);
+    $rarfile_abs = get_absolute_path($rarfile);
     
     if (!file_exists($rarfile_abs)) {
-        return false; // File doesn't exist, so not encrypted
+        return false;
     }
     
-    // Check if file has content (not empty)
     $file_size = filesize($rarfile_abs);
     if ($file_size === 0) {
-        return false; // Empty file, not encrypted
+        return false;
     }
     
-    // Try to list archive contents without password
-    // Use a more robust approach that won't prompt for passwords
+    // Try to list archive contents without password, using an approach that won't trigger a password prompt
     $rar_cmd = 'printf "" | rar lb -inul ' . escapeshellarg($rarfile_abs) . ' 2>/dev/null';
     
     exec($rar_cmd, $output, $code);
@@ -942,12 +908,12 @@ function get_password_with_detection($rarfile) {
 }
 
 /**
- * Remove password arguments from argv for cleaner command parsing
+ * Remove some arguments from argv for cleaner command parsing
  * 
  * Filters out the -p password arguments and --low-priority flag from the command line arguments
  * to simplify the argument parsing in the main command dispatch.
  * 
- * @return array Cleaned command line arguments without password and flags
+ * @return array Cleaned command line arguments
  */
 function clean_argv() {
     global $argv;
@@ -1037,24 +1003,21 @@ function parse_symlink_entry($line) {
     }
     
     $entry = [
-        'path' => $parts[0],
-        'type' => $parts[1],
-        'target' => $parts[2]
+        'path'      => $parts[0],
+        'type'      => $parts[1],
+        'target'    => $parts[2]
     ];
-    
-    // Check if this is the new format with metadata (10+ parts including size)
-    if (count($parts) >= 10) {
-        $entry['metadata'] = [
-            'permissions' => $parts[3],
-            'owner' => $parts[4],
-            'group' => $parts[5],
-            'mtime' => (int)$parts[6],
-            'atime' => (int)$parts[7],
-            'ctime' => (int)$parts[8],
-            'size' => (int)$parts[9]
-        ];
-    }
-    
+
+    $entry['metadata'] = [
+        'permissions'   => $parts[3],
+        'owner'         => $parts[4],
+        'group'         => $parts[5],
+        'mtime'         => (int)$parts[6],
+        'atime'         => (int)$parts[7],
+        'ctime'         => (int)$parts[8],
+        'size'          => (int)$parts[9]
+    ];
+
     return $entry;
 }
 
@@ -1082,34 +1045,36 @@ switch ($cmd) {
     case 'commit':
         if (count($cleaned_argv) < 4 || count($cleaned_argv) > 6) usage();
         $comment = count($cleaned_argv) >= 5 ? $cleaned_argv[4] : "Automated Snapshot";
-        $password = get_password_with_detection($cleaned_argv[3]);
-        commit($cleaned_argv[2], $cleaned_argv[3], $comment, $password);
+        $password = get_password_with_detection(get_absolute_path($cleaned_argv[3]));
+        commit($cleaned_argv[2], get_absolute_path($cleaned_argv[3]), $comment, $password);
         break;
     case 'list':
         if (count($cleaned_argv) !== 3) usage();
-        $password = get_password_with_detection($cleaned_argv[2]);
-        list_versions($cleaned_argv[2], $password);
+        $password = get_password_with_detection(get_absolute_path($cleaned_argv[2]));
+        list_versions(get_absolute_path($cleaned_argv[2]), $password);
         break;
     case 'checkout':
         if (count($cleaned_argv) !== 5) usage();
-        $password = get_password_with_detection($cleaned_argv[3]);
-        // Only exit if archive is encrypted but no password provided
-        if ($password === null && file_exists($cleaned_argv[3]) && is_archive_encrypted($cleaned_argv[3])) {
+        $repository = get_absolute_path($cleaned_argv[3]);
+        $password = get_password_with_detection($repository);
+
+        // exit if archive is encrypted but no password provided
+        if ($password === null && file_exists($repository) && is_archive_encrypted($repository)) {
             echo "ERROR: Archive is password protected but no password provided.\n";
             echo "Use -p password to provide the password.\n";
             exit(1);
         }
-        checkout($cleaned_argv[2], $cleaned_argv[3], $cleaned_argv[4], $password);
+        checkout($cleaned_argv[2], $repository, $cleaned_argv[4], $password);
         break;
     case 'diff':
         if (count($cleaned_argv) !== 5) usage();
-        $password = get_password_with_detection($cleaned_argv[4]);
-        diff_versions($cleaned_argv[2], $cleaned_argv[3], $cleaned_argv[4], $password);
+        $password = get_password_with_detection(get_absolute_path($cleaned_argv[4]));
+        diff_versions($cleaned_argv[2], $cleaned_argv[3], get_absolute_path($cleaned_argv[4]), $password);
         break;
     case 'repair':
         if (count($cleaned_argv) !== 3) usage();
-        $password = get_password_with_detection($cleaned_argv[2]);
-        repair($cleaned_argv[2], $password);
+        $password = get_password_with_detection(get_absolute_path($cleaned_argv[2]));
+        repair(get_absolute_path($cleaned_argv[2]), $password);
         break;
     default:
         usage();
@@ -1125,7 +1090,6 @@ function scanDirGenerator($dir, $sudo_password = null) {
         $files = new FilesystemIterator($dir, FilesystemIterator::SKIP_DOTS);
         foreach ($files as $file) {
             if ($file->isDir()) {
-                // Use yield from for recursion
                 yield from scanDirGenerator($file->getPathname(), $sudo_password);
             } else {
                 yield $file->getPathname();
@@ -1166,7 +1130,6 @@ function scanDirGeneratorForDirs($dir, $sudo_password = null) {
         foreach ($files as $file) {
             if ($file->isDir()) {
                 yield $file->getPathname();
-                // Use yield for recursion
                 yield from scanDirGeneratorForDirs($file->getPathname(), $sudo_password);
             }
         }
@@ -1195,7 +1158,7 @@ function scanDirGeneratorForDirs($dir, $sudo_password = null) {
 }
 
 /**
- * Create a new backup snapshot of the specified folder
+ * Commit a new snapshot of the specified folder to the archive
  * 
  * Scans the source folder, creates a manifest of all files and directories,
  * deduplicates files using MD5 hashes, and creates a new snapshot in the
@@ -1216,9 +1179,6 @@ function commit($folder, $rarfile, $comment, $password = null) {
         exit(1);
     }
 
-    // Get absolute path for RAR file
-    $rarfile_abs = get_rar_absolute_path($rarfile);
-
     // Use provided comment or default
     if (empty($comment)) {
         $comment = "Automated Snapshot";
@@ -1234,22 +1194,16 @@ function commit($folder, $rarfile, $comment, $password = null) {
     mkdir($tmp_files, 0700, true);
     mkdir($tmp_versions, 0700, true);
 
-    //echo "Scanning files in '$folder'...\n";
-
     // Check if sudo permissions will be needed early
     $sudo_password = null;
-    $use_sudo_scan = false;
     
     if (needs_sudo_permissions($folder)) {
         $sudo_password = prompt_for_sudo_password();
-        if ($sudo_password !== null) {
-            $use_sudo_scan = true;
-        }
     }
 
     // First pass: Record files, parent dirs, and prepare deduplication
     $manifest           = [];
-    $known_hashes       = get_archive_hashes($rarfile_abs, $password);
+    $known_hashes       = get_archive_hashes($rarfile, $password);
     $seen_hashes        = [];
     $file_count         = 0;
     $add_count          = 0;
@@ -1263,28 +1217,82 @@ function commit($folder, $rarfile, $comment, $password = null) {
     $follow_symlinks    = has_follow_symlinks();
     
     // Get archive size before backup for comparison
-    $archive_size_before = get_archive_size($rarfile_abs);
+    $archive_size_before = get_archive_size($rarfile);
     
     echo "\n";
     print_info("🔍 Scanning and calculating hashes. [$folder]");
 
-    // Use sudo scan if needed, otherwise use normal generator
-    if ($use_sudo_scan) {
-        $sudo_scan_result   = sudo_scan_directory($folder, $sudo_password);
-        $processed_count    = 0;
-        
-        foreach ($sudo_scan_result['files'] as $filepath) {
-            // Since we used 'find -type f', we know these are files
-            $file       = new SplFileInfo($filepath);
-            $fullpath   = $file->getPathname();
-            $rel        = ltrim(substr($fullpath, strlen($folder)), '/');
-            
-            // Show progress every 10 files
-            if ($file_count % 10 === 0 && $file_count > 0) {
-                echo "\r" . colorize("  📁 Processed " . number_format($file_count) . " files...", COLOR_CYAN);
-            }
+    $processed_count = 0;
+    foreach (scanDirGenerator($folder, $sudo_password) as $filepath) {
+        $file       = new SplFileInfo($filepath);
+        $fullpath   = $file->getPathname();
+        $rel        = ltrim(substr($fullpath, strlen($folder)), '/');
 
-            // For sudo scan, treat all files as regular files (skip symlink checks)
+        if ($file->isLink()) {
+            // Handle symbolic links first (before checking isFile)
+            $symlink_count++;
+            
+            if ($follow_symlinks) {
+                // Follow the symlink and backup its target
+                $target_path = readlink($fullpath);
+                $real_target = realpath($fullpath);
+                
+                if ($real_target && file_exists($real_target)) {
+                    // Check if target is within the backup scope
+                    if (strpos($real_target, $folder) === 0) {
+                        // Target is within backup scope, process it
+                        $target_rel = ltrim(substr($real_target, strlen($folder)), '/');
+                        
+                        // Record parent directories
+                        $parts = explode('/', $target_rel);
+                        for ($i = 1; $i < count($parts); $i++) {
+                            $dir = implode('/', array_slice($parts, 0, $i));
+                            $parent_dirs[$dir] = 1;
+                        }
+                        
+                        if (is_file($real_target)) {
+                            // Try to get MD5 hash (sudo password already handled if needed)
+                            $md5 = get_file_md5($real_target, $sudo_password);
+                            if ($md5 === false) {
+                                // Skip files we can't read
+                                $skipped_count++;
+                                $skipped_files[] = $target_rel;
+                                $skipped_reasons[$target_rel] = "Symlink target MD5 calculation failed";
+                                continue;
+                            }
+                            
+                            // Get file size for tracking
+                            $file_size = get_file_metadata($real_target, $sudo_password)['size'];
+                            $total_size += $file_size;
+                            
+                            $manifest[] = create_manifest_entry($target_rel, $md5, $real_target, $sudo_password);
+                            
+                            if (isset($seen_hashes[$md5])) {
+                                $already_count++;
+                            } elseif (!isset($known_hashes[$md5])) {
+                                if (copy_file($real_target, "$tmp_files/$md5", $sudo_password)) {
+                                    $add_count++;
+                                } else {
+                                    // Skip files we can't copy
+                                    $skipped_count++;
+                                    $skipped_files[] = $target_rel;
+                                    $skipped_reasons[$target_rel] = "Symlink target copy operation failed";
+                                    continue;
+                                }
+                            } else {
+                                $already_count++;
+                            }
+                            
+                            $seen_hashes[$md5] = true;
+                            $file_count++;
+                        }
+                    }
+                }
+            } else {
+                // Store the symlink itself (not its target)
+                $manifest[] = create_symlink_entry($rel, $fullpath, $sudo_password);
+            }
+        } elseif ($file->isFile()) {
             // Record all parent directories (for later use)
             $parts = explode('/', $rel);
 
@@ -1332,161 +1340,23 @@ function commit($folder, $rarfile, $comment, $password = null) {
             if ($file_count % 10 === 0) {
                 echo "\r" . colorize("  📁 Processed " . number_format($file_count) . " files...", COLOR_CYAN);
             }
+        
         }
-
-        echo "\r" . colorize("  📁 Processed " . number_format($file_count) . " files...", COLOR_CYAN);
-    } else {
-        // Use normal generator scan
-        $processed_count = 0;
-        foreach (scanDirGenerator($folder, $sudo_password) as $filepath) {
-            $file       = new SplFileInfo($filepath);
-            $fullpath   = $file->getPathname();
-            $rel        = ltrim(substr($fullpath, strlen($folder)), '/');
-
-            if ($file->isLink()) {
-                // Handle symbolic links first (before checking isFile)
-                $symlink_count++;
-                
-                if ($follow_symlinks) {
-                    // Follow the symlink and backup its target
-                    $target_path = readlink($fullpath);
-                    $real_target = realpath($fullpath);
-                    
-                    if ($real_target && file_exists($real_target)) {
-                        // Check if target is within the backup scope
-                        if (strpos($real_target, $folder) === 0) {
-                            // Target is within backup scope, process it
-                            $target_rel = ltrim(substr($real_target, strlen($folder)), '/');
-                            
-                            // Record parent directories
-                            $parts = explode('/', $target_rel);
-                            for ($i = 1; $i < count($parts); $i++) {
-                                $dir = implode('/', array_slice($parts, 0, $i));
-                                $parent_dirs[$dir] = 1;
-                            }
-                            
-                            if (is_file($real_target)) {
-                                // Try to get MD5 hash (sudo password already handled if needed)
-                                $md5 = get_file_md5($real_target, $sudo_password);
-                                if ($md5 === false) {
-                                    // Skip files we can't read
-                                    $skipped_count++;
-                                    $skipped_files[] = $target_rel;
-                                    $skipped_reasons[$target_rel] = "Symlink target MD5 calculation failed";
-                                    continue;
-                                }
-                                
-                                // Get file size for tracking
-                                $file_size = get_file_metadata($real_target, $sudo_password)['size'];
-                                $total_size += $file_size;
-                                
-                                $manifest[] = create_manifest_entry($target_rel, $md5, $real_target, $sudo_password);
-                                
-                                if (isset($seen_hashes[$md5])) {
-                                    $already_count++;
-                                } elseif (!isset($known_hashes[$md5])) {
-                                    if (copy_file($real_target, "$tmp_files/$md5", $sudo_password)) {
-                                        $add_count++;
-                                    } else {
-                                        // Skip files we can't copy
-                                        $skipped_count++;
-                                        $skipped_files[] = $target_rel;
-                                        $skipped_reasons[$target_rel] = "Symlink target copy operation failed";
-                                        continue;
-                                    }
-                                } else {
-                                    $already_count++;
-                                }
-                                
-                                $seen_hashes[$md5] = true;
-                                $file_count++;
-                            }
-                        }
-                    }
-                } else {
-                    // Store the symlink itself (not its target)
-                    $manifest[] = create_symlink_entry($rel, $fullpath, $sudo_password);
-                }
-            } elseif ($file->isFile()) {
-                // Record all parent directories (for later use)
-                $parts = explode('/', $rel);
-
-                for ($i = 1; $i < count($parts); $i++) {
-                    $dir = implode('/', array_slice($parts, 0, $i));
-                    $parent_dirs[$dir] = 1; // Mark as containing at least one file
-                }
-
-                // Try to get MD5 hash (sudo password already handled if needed)
-                $md5 = get_file_md5($fullpath, $sudo_password);
-                if ($md5 === false) {
-                    // Skip files we can't read
-                    $skipped_count++;
-                    $skipped_files[] = $rel;
-                    $skipped_reasons[$rel] = "MD5 calculation failed";
-                    continue;
-                }
-                
-                // Get file size for tracking
-                $file_size = get_file_metadata($fullpath, $sudo_password)['size'];
-                $total_size += $file_size;
-                
-                $manifest[] = create_manifest_entry($rel, $md5, $fullpath, $sudo_password);
-
-                if (isset($seen_hashes[$md5])) {
-                    $already_count++;
-                } elseif (!isset($known_hashes[$md5])) {
-                    if (copy_file($fullpath, "$tmp_files/$md5", $sudo_password)) {
-                        $add_count++;
-                    } else {
-                        // Skip files we can't copy
-                        $skipped_count++;
-                        $skipped_files[] = $rel;
-                        $skipped_reasons[$rel] = "Copy operation failed";
-                        continue;
-                    }
-                } else {
-                    $already_count++;
-                }
-
-                $seen_hashes[$md5] = true;
-                $file_count++;
-                $processed_count++;
-
-                if ($file_count % 10 === 0) {
-                    echo "\r" . colorize("  📁 Processed " . number_format($file_count) . " files...", COLOR_CYAN);
-                }
-            
-            }
-        }
-
-        echo "\r" . colorize("  📁 Processed " . number_format($file_count) . " files...", COLOR_CYAN);
     }
 
+    echo "\r" . colorize("  📁 Processed " . number_format($file_count) . " files...", COLOR_CYAN);
+    
     // Second pass: capture ALL directories with their metadata
     $all_dirs = [];
 
-    if ($use_sudo_scan) {
-        // Use directories from sudo scan
-        foreach ($sudo_scan_result['directories'] as $dirpath) {
-            $rel = ltrim(substr($dirpath, strlen($folder)), '/');
+    foreach (scanDirGeneratorForDirs($folder, $sudo_password) as $dirpath) {
+        $rel = ltrim(substr($dirpath, strlen($folder)), '/');
 
-            if ($rel === '') {
-                continue; // skip root
-            }
-
-            $all_dirs[] = $rel;
+        if ($rel === '') {
+            continue; // skip root
         }
-    } else {
-        // Use normal directory generator
-        foreach (scanDirGeneratorForDirs($folder, $sudo_password) as $dirpath) {
-            $rel = ltrim(substr($dirpath, strlen($folder)), '/');
 
-            if ($rel === '') {
-                continue; // skip root
-            }
-
-            $all_dirs[] = $rel;
-        }
+        $all_dirs[] = $rel;
     }
 
     foreach ($all_dirs as $dir) {
@@ -1535,12 +1405,12 @@ function commit($folder, $rarfile, $comment, $password = null) {
         }
     }
 
-    // Check if this snapshot is identical to the last one
+    // Check if this commit is identical to the last one
     $last_manifest = get_last_manifest($rarfile, $password);
     $current_manifest_content = implode("\n", $manifest) . "\n";
     
     if ($last_manifest && $last_manifest['content'] === $current_manifest_content) {
-        echo "Last snapshot:    {$last_manifest['name']}\n";
+        echo "Last Commit:      {$last_manifest['name']}\n";
         echo "Comment:          $comment\n\n";
         echo "NOTE: No changes detected since last backup. Skipping snapshot creation.\n";
         
@@ -1578,7 +1448,7 @@ function commit($folder, $rarfile, $comment, $password = null) {
         $rar_cmd .= ' -hp' . escapeshellarg($password);
     }
 
-    $rar_cmd .= ' ' . escapeshellarg($rarfile_abs) . ' files versions bitfreeze.php README.txt';
+    $rar_cmd .= ' ' . escapeshellarg($rarfile) . ' files versions bitfreeze.php README.txt';
 
     // Count files to be archived for progress tracking
     $files_to_archive = count_files_to_archive($temp);
@@ -1593,7 +1463,7 @@ function commit($folder, $rarfile, $comment, $password = null) {
     chdir($cwd);
 
     if (!$rar_success) {
-        print_error("❌ Failed to create archive!");
+        print_error("❌ Failed to commit snapshot to RAR archive!");
         exec('rm -rf ' . escapeshellarg($temp));
         exit(1);
     }
@@ -1604,22 +1474,20 @@ function commit($folder, $rarfile, $comment, $password = null) {
     $duration = round(microtime(true) - $start, 2);
 
     // Get archive size after backup for comparison
-    $archive_size_after = get_archive_size($rarfile_abs);
+    $archive_size_after = get_archive_size($rarfile);
     $compression_stats = calculate_compression_stats($total_size, $archive_size_after);
 
-    //print_success("🎉 Backup complete!");
-    
-    // Display backup summary
-    print_header("BACKUP SUMMARY");
+    print_header("COMMIT SUMMARY");
     
     $summary_data = [
-        ['Snapshot', $manifest_filename],
+        ['Commit ID', $snapshot_id],
+        ['Commit Manifest', $manifest_filename],
         ['Comment', $comment],
-        ['Duration', format_duration($duration)],
+        ['Time Elapsed', format_duration($duration)],
         ['Files Scanned', number_format($file_count)],
         ['Total Size', format_file_size($total_size)],
         ['Unique Files Added', number_format($add_count)],
-        ['Already Present', number_format($already_count)],
+        ['Duplicate Files', number_format($already_count)],
         ['Files Skipped', number_format($skipped_count)],
         ['Directories Recorded', number_format(count($all_dirs))]
     ];
@@ -1630,7 +1498,7 @@ function commit($folder, $rarfile, $comment, $password = null) {
     }
     
     if ($password) {
-        $summary_data[] = ['Archive Encryption', 'Enabled'];
+        $summary_data[] = ['Repository Encryption', 'Enabled'];
     }
     
     $widths = [25, 30];
@@ -1639,11 +1507,11 @@ function commit($folder, $rarfile, $comment, $password = null) {
     }
     
     // Display compression statistics
-    print_header("SIZE STATISTICS");
+    print_header("REPOSITORY SIZE & COMPRESSION");
     
     $compression_data = [
         ['Original Size', $compression_stats['original_formatted']],
-        ['Archive Size', $compression_stats['archive_formatted']],
+        ['Repository Size', $compression_stats['archive_formatted']],
     ];
     
     // Show size difference with appropriate label
@@ -1702,25 +1570,23 @@ function commit($folder, $rarfile, $comment, $password = null) {
 function get_archive_hashes($rarfile, $password = null) {
     $out = [];
 
-    $rarfile_abs = get_rar_absolute_path($rarfile);
-    
-    if (!file_exists($rarfile_abs)) {
+    if (!file_exists($rarfile)) {
         return $out;
     }
-    
+
     $rar_cmd = 'rar lb';
 
     if ($password) {
         $rar_cmd .= ' -hp' . escapeshellarg($password);
     }
 
-    $rar_cmd .= ' ' . escapeshellarg($rarfile_abs) . ' files/';
-    
+    $rar_cmd .= ' ' . escapeshellarg($rarfile) . ' files/';
+
     // Add input redirection to prevent password prompts
     $rar_cmd .= ' </dev/null 2>/dev/null';
-    
+
     exec($rar_cmd, $lines, $code);
-    
+
     // If command failed for any reason, return empty array
     if ($code !== 0) {
         return $out;
@@ -1747,9 +1613,8 @@ function get_archive_hashes($rarfile, $password = null) {
  */
 function get_next_snapshot_id($rarfile, $password = null) {
     $max = 0;
-    $rarfile_abs = get_rar_absolute_path($rarfile);
 
-    if (!file_exists($rarfile_abs)) {
+    if (!file_exists($rarfile)) {
         return 1;
     }
     
@@ -1759,7 +1624,7 @@ function get_next_snapshot_id($rarfile, $password = null) {
         $rar_cmd .= ' -hp' . escapeshellarg($password);
     }
 
-    $rar_cmd .= ' ' . escapeshellarg($rarfile_abs) . ' versions/';
+    $rar_cmd .= ' ' . escapeshellarg($rarfile) . ' versions/';
     
     // Add input redirection to prevent password prompts
     $rar_cmd .= ' </dev/null 2>/dev/null';
@@ -1773,53 +1638,55 @@ function get_next_snapshot_id($rarfile, $password = null) {
 
     foreach ($lines as $line) {
         if (preg_match('/^versions\/(\d+)-/', $line, $m)) {
-            $v = (int)$m[1];
-            if ($v > $max) $max = $v;
+            $v = (int) $m[1];
+
+            if ($v > $max) {
+                $max = $v;
+            }
         }
     }
 
-    return $max+1;
+    return $max + 1;
 }
 
 /**
- * List all available backup snapshots
+ * List all available commits
  * 
- * Extracts and displays all snapshots in the archive with their
- * IDs, timestamps, and comments. Shows most recent snapshots first.
+ * Extracts and displays all commits in the repository with their
+ * IDs, timestamps, and comments. Shows most recent commits first.
  * 
- * @param string $rarfile RAR archive file path
- * @param string|null $password Password for archive access
+ * @param string $rarfile RAR repository file path
+ * @param string|null $password Password for repository access
  * @return void
  */
 function list_versions($rarfile, $password = null) {
-    $rarfile_abs = get_rar_absolute_path($rarfile);
-    
-    if (!file_exists($rarfile_abs)) {
-        echo "Repository archive not found.\n";
+    if (!file_exists($rarfile)) {
+        echo "Repository not found.\n";
         exit(1);
     }
-    
+
     $rar_cmd = 'rar lb';
 
     if ($password) {
         $rar_cmd .= ' -hp' . escapeshellarg($password);
     }
 
-    $rar_cmd .= ' ' . escapeshellarg($rarfile_abs) . ' versions/';
-    
+    $rar_cmd .= ' ' . escapeshellarg($rarfile) . ' versions/';
+
     // Add input redirection to prevent password prompts
     $rar_cmd .= ' </dev/null 2>/dev/null';
-    
+
     exec($rar_cmd, $lines, $code);
-    
+
     // Check if command failed due to missing password
     if ($code !== 0) {
         if ($code === 10 || $code === 255) {
-            echo "ERROR: Archive is password protected but no password provided.\n";
+            echo "ERROR: Repository is password protected but no password provided.\n";
             echo "Use -p password to provide the password.\n";
         } else {
-            echo "ERROR: Failed to access archive (exit code: $code).\n";
+            echo "ERROR: Failed to access repository (exit code: $code).\n";
         }
+
         exit(1);
     }
 
@@ -1841,11 +1708,11 @@ function list_versions($rarfile, $password = null) {
     usort($versions, fn($a, $b) => strcmp($b['ts'], $a['ts']));
 
     if (!$versions) {
-        echo "No snapshots found.\n";
+        echo "No commits found.\n";
         return;
     }
     
-    echo "Available snapshots (most recent first):\n";
+    echo "Available Commits (most recent first):\n";
     echo "ID    Date/Time           Comment\n";
     echo "----------------------------------------\n";
     
@@ -1902,22 +1769,36 @@ function get_comment_from_archive($rarfile, $comment_file, $password = null) {
 }
 
 /**
- * Checkout a specific backup snapshot to a directory
+ * Check if a symlink exists and points to the target
  * 
- * Extracts the specified snapshot from the archive and reconstructs
- * the file tree in the output directory. Handles file deduplication
- * and directory structure restoration.
+ * @param string $link Path to the symlink
+ * @param string $target Path to the target
+ * @return bool
+ */
+function symlink_exists_and_points_to($link, $target) {
+    return is_link($link) && (readlink($link) === $target);
+}
+
+/**
+ * Checkout a specific commit to a directory
  * 
- * @param int $snapshot_id ID of the snapshot to checkout
- * @param string $rarfile RAR archive file path
+ * Extracts the specified commit from the repository and reconstructs
+ * the file tree in the output directory. Handles directory structure
+ * restoration.
+ * 
+ * @param int $snapshot_id ID of the commit to checkout
+ * @param string $rarfile RAR repository file path
  * @param string $outdir Output directory for checkout
- * @param string|null $password Password for archive access
+ * @param string|null $password Password for repository access
  * @return void
  */
 function checkout($snapshot_id, $rarfile, $outdir, $password = null) {
     $parent = dirname($outdir);
 
-    print_header("BUILDING VERSION $snapshot_id");
+    $encrypted      = is_archive_encrypted($rarfile) ? 'ENCRYPTED' : '';
+    $low_priority   = has_low_priority_flag() ? 'LOW PRIORITY' : '';
+
+    print_header("CHECKOUT $encrypted COMMIT $snapshot_id $low_priority");
 
     if (!is_writable($parent)) {
         echo "ERROR: Cannot checkout to $outdir: Permission denied\n";
@@ -1925,7 +1806,7 @@ function checkout($snapshot_id, $rarfile, $outdir, $password = null) {
     }
 
     if (!file_exists($rarfile)) {
-        echo "Repository archive not found.\n";
+        echo "Repository not found.\n";
         exit(1);
     }
 
@@ -1933,7 +1814,7 @@ function checkout($snapshot_id, $rarfile, $outdir, $password = null) {
 
     // Check for password errors
     if (is_array($manifest) && isset($manifest['error']) && $manifest['error'] === 'password') {
-        echo "ERROR: Archive is password protected but no password provided.\n";
+        echo "ERROR: Repository is password protected but no password provided.\n";
         echo "Use -p password to provide the password.\n";
         exit(1);
     }
@@ -1943,7 +1824,7 @@ function checkout($snapshot_id, $rarfile, $outdir, $password = null) {
         exit(1);
     }
 
-    echo "Preparing version $snapshot_id for checkout.\n";
+    echo "Preparing commit $snapshot_id for checkout.\n";
     echo "Manifest: " . str_replace('versions/', '', $manifest['name']) . "\n";
     
     // Check if we need sudo for permission restoration
@@ -1951,7 +1832,7 @@ function checkout($snapshot_id, $rarfile, $outdir, $password = null) {
     $is_root = function_exists('posix_getuid') && posix_getuid() === 0;
     
     if (!$is_root && can_elevate_privileges()) {
-        $sudo_password = prompt_for_sudo_password();
+        $sudo_password = prompt_for_sudo_password('write');
     }
 
     $temp = sys_get_temp_dir() . '/rarrepo_' . uniqid(mt_rand(),true);
@@ -1989,7 +1870,7 @@ function checkout($snapshot_id, $rarfile, $outdir, $password = null) {
     // 2. Gather needed hashes and filepaths
     $hashmap        = []; // hash => [path1, path2,...]
     $restorelist    = [];
-    $dir_metadata_restore = []; // Store directory metadata for restoration after files
+    $dir_metadata   = []; // Store directory metadata for restoration after files
     $lines          = file($manifest_path, FILE_IGNORE_NEW_LINES|FILE_SKIP_EMPTY_LINES);
     
     // Get current user info for permission restoration
@@ -2007,93 +1888,73 @@ function checkout($snapshot_id, $rarfile, $outdir, $password = null) {
 
             if (!is_dir($dir)) {
                 // Use system mkdir command to avoid PHP mkdir timestamp issues
-                $escaped_dir = escapeshellarg($dir);
-                exec("mkdir -p -m 0755 $escaped_dir");
+                exec("mkdir -p -m 0755 " . escapeshellarg($dir));
             }
             
             // Store directory metadata for restoration after all files are processed
             if (isset($entry['metadata'])) {
-                $dir_metadata_restore[] = [
-                    'dir' => $dir,
-                    'metadata' => $entry['metadata']
+                $dir_metadata[] = [
+                    'dir'       => $dir,
+                    'metadata'  => $entry['metadata']
                 ];
             }
 
             continue;
         } elseif (isset($entry['type']) && $entry['type'] === '[LINK]') {
             // Handle symbolic links
-            $link_path = rtrim($outdir, '/') . '/' . $entry['path'];
-            $link_dir = dirname($link_path);
+            $link_path  = rtrim($outdir, '/') . '/' . $entry['path'];
+            $link_dir   = dirname($link_path);
 
             if (!is_dir($link_dir)) {
                 mkdir($link_dir, 0755, true);
             }
-            
-            // Create the symlink
-            if (symlink($entry['target'], $link_path)) {
-                // Restore symlink metadata if available
-                if (isset($entry['metadata'])) {
-                    // Note: symlink permissions are limited, but we can try
-                    if ($is_root || $sudo_password !== null) {
-                        $owner_id = is_numeric($entry['metadata']['owner']) ? 
-                            $entry['metadata']['owner'] : 
-                            (function_exists('posix_getpwnam') ? posix_getpwnam($entry['metadata']['owner'])['uid'] : null);
-                        $group_id = is_numeric($entry['metadata']['group']) ? 
-                            $entry['metadata']['group'] : 
-                            (function_exists('posix_getgrnam') ? posix_getgrnam($entry['metadata']['group'])['gid'] : null);
-                        
-                        if ($owner_id !== null) {
-                            if ($is_root) {
-                                if (function_exists('lchown')) {
-                                    lchown($link_path, $owner_id);
-                                }
-                            } else {
-                                execute_with_sudo("lchown $owner_id " . escapeshellarg($link_path), $sudo_password);
-                            }
-                        }
-                        if ($group_id !== null) {
-                            if ($is_root) {
-                                if (function_exists('lchgrp')) {
-                                    lchgrp($link_path, $group_id);
-                                }
-                            } else {
-                                execute_with_sudo("lchgrp $group_id " . escapeshellarg($link_path), $sudo_password);
-                            }
-                        }
-                    }
-                    // Note: touch() doesn't work on symlinks, but we can try lchmod if available
-                }
-            } else {
-                // Try to create symlink with sudo if available and user is not root
-                if (!$is_root && $sudo_password !== null) {
+
+            if (!symlink_exists_and_points_to($link_path, $entry['target'])) {
+                // Try native symlink
+                if (!@symlink($entry['target'], $link_path)) {
                     $escaped_target = escapeshellarg($entry['target']);
                     $escaped_link_path = escapeshellarg($link_path);
-                    $result = execute_with_sudo("ln -s $escaped_target $escaped_link_path", $sudo_password);
-                    
-                    if ($result === 0) {
-                        echo "[INFO] Created symlink with sudo: {$entry['path']} -> {$entry['target']}\n";
-                        
-                        // Restore metadata if available
-                        if (isset($entry['metadata'])) {
-                            $owner_id = is_numeric($entry['metadata']['owner']) ? 
-                                $entry['metadata']['owner'] : 
-                                (function_exists('posix_getpwnam') ? posix_getpwnam($entry['metadata']['owner'])['uid'] : null);
-                            $group_id = is_numeric($entry['metadata']['group']) ? 
-                                $entry['metadata']['group'] : 
-                                (function_exists('posix_getgrnam') ? posix_getgrnam($entry['metadata']['group'])['gid'] : null);
-                            
-                            if ($owner_id !== null) {
-                                execute_with_sudo("lchown $owner_id " . escapeshellarg($link_path), $sudo_password);
-                            }
-                            if ($group_id !== null) {
-                                execute_with_sudo("lchgrp $group_id " . escapeshellarg($link_path), $sudo_password);
-                            }
-                        }
+
+                    if ($sudo_password !== null) {
+                        // Try with sudo
+                        $result = execute_with_sudo("ln -s $escaped_target $escaped_link_path", $sudo_password);
                     } else {
-                        echo "[WARNING] Could not create symlink: {$entry['path']} -> {$entry['target']}\n";
+                        // Try with direct exec
+                        exec("ln -s $escaped_target $escaped_link_path", $output, $ln_result);
                     }
-                } else {
-                    echo "[WARNING] Could not create symlink: {$entry['path']} -> {$entry['target']}\n";
+                }
+            }
+
+            if (symlink_exists_and_points_to($link_path, $entry['target'])) {
+                $created = true;
+            } else {
+                $created = false;
+                echo "[WARNING] Could not create symlink: {$entry['path']} -> {$entry['target']}\n";
+            }
+
+            // If symlink was created, restore metadata
+            if (symlink_exists_and_points_to($link_path, $entry['target']) && isset($entry['metadata'])) {
+                $owner_id = is_numeric($entry['metadata']['owner']) ?
+                    $entry['metadata']['owner'] :
+                    (function_exists('posix_getpwnam') ? (posix_getpwnam($entry['metadata']['owner'])['uid'] ?? null) : null);
+
+                $group_id = is_numeric($entry['metadata']['group']) ?
+                    $entry['metadata']['group'] :
+                    (function_exists('posix_getgrnam') ? (posix_getgrnam($entry['metadata']['group'])['gid'] ?? null) : null);
+
+                if ($owner_id !== null) {
+                    if ($is_root) {
+                        exec("lchown " . escapeshellarg($owner_id) . " " . escapeshellarg($link_path));
+                    } elseif ($sudo_password !== null) {
+                        execute_with_sudo("lchown $owner_id " . escapeshellarg($link_path), $sudo_password);
+                    }
+                }
+                if ($group_id !== null) {
+                    if ($is_root) {
+                        exec("lchgrp " . escapeshellarg($group_id) . " " . escapeshellarg($link_path));
+                    } elseif ($sudo_password !== null) {
+                        execute_with_sudo("lchgrp $group_id " . escapeshellarg($link_path), $sudo_password);
+                    }
                 }
             }
             
@@ -2108,7 +1969,7 @@ function checkout($snapshot_id, $rarfile, $outdir, $password = null) {
     }
 
     echo "\n";
-    echo "Will checkout " . number_format(count($restorelist)) . " files (" . number_format(count($hashmap)) . " unique contents).\n";
+    echo "Commit $snapshot_id contains " . number_format(count($restorelist)) . " files (" . number_format(count($hashmap)) . " unique contents).\n";
 
     // 3. Extract all needed hashes (content blobs) to temp dir
     $all_hashes = array_keys($hashmap);
@@ -2122,9 +1983,9 @@ function checkout($snapshot_id, $rarfile, $outdir, $password = null) {
     $exlistfile = "$temp/extract.lst";
 
     file_put_contents($exlistfile, implode("\n", $exlist) . "\n");
-    echo "Extracting " . number_format(count($all_hashes)) . " unique file contents from archive...\n";
+    echo "Preparing to regenerate " . number_format(count($all_hashes)) . " files from repository...\n";
     
-    $rar_cmd = 'rar e -idq -inul';
+    $rar_cmd = 'rar e';
 
     if ($password) {
         $rar_cmd .= ' -hp' . escapeshellarg($password);
@@ -2135,7 +1996,7 @@ function checkout($snapshot_id, $rarfile, $outdir, $password = null) {
     // Add nice level to RAR command
     $rar_cmd = add_nice_to_rar_command($rar_cmd);
 
-    print_header("EXTRACTING FILES");
+    print_header("READING DATA");
     echo colorize("⏳ Please wait...", COLOR_CYAN) . "\n";
 
     // Execute RAR extraction with progress tracking
@@ -2185,17 +2046,17 @@ function checkout($snapshot_id, $rarfile, $outdir, $password = null) {
         }
 
         if (($n+1) % 10 === 0) {
-            echo "\rChecked out " . ($n+1) . "/$count";
+            echo "\rFinalizing " . number_format($n+1) . " of " . number_format($count) . " files";
         }
     }
 
-    echo "\rChecked out " . ($n+1) . "/$count";
+    echo "\rFinalizing " . number_format($n+1) . " of " . number_format($count) . " files";
     echo "\n";
 
     // Restore directory metadata after all files are processed
-    foreach ($dir_metadata_restore as $dir_meta) {
-        $dir = $dir_meta['dir'];
-        $metadata = $dir_meta['metadata'];
+    foreach ($dir_metadata as $dm) {
+        $dir = $dm['dir'];
+        $metadata = $dm['metadata'];
         
         if (is_dir($dir)) {
             // Always restore permissions (this should work for directories we own)
@@ -2220,6 +2081,7 @@ function checkout($snapshot_id, $rarfile, $outdir, $password = null) {
                     @chown($dir, $owner_id);
                 }
             }
+
             if ($group_id !== null) {
                 if ($is_root) {
                     chgrp($dir, $group_id);
@@ -2249,6 +2111,8 @@ function checkout($snapshot_id, $rarfile, $outdir, $password = null) {
     if ($errors) {
         echo "Errors: " . number_format($errors) . "\n";
     }
+
+    echo colorize("All operations completed successfully", COLOR_GREEN) . "\n";
 
     // Display resource usage summary
     // print_header("RESOURCE USAGE");
@@ -2566,8 +2430,8 @@ function parse_manifest($manifest_path) {
     
     foreach ($lines as $line) {
         $entry = parse_manifest_entry($line);
-        
-        if ($entry && $entry['hash'] !== '[DIR]' && (!isset($entry['type']) || $entry['type'] !== '[LINK]')) {
+
+        if ($entry && (!isset($entry['type']) || $entry['type'] !== '[LINK]') && $entry['hash'] !== '[DIR]') {
             $files[$entry['path']] = $entry['hash'];
         }
     }
@@ -2607,6 +2471,12 @@ function repair($rarfile, $password = null) {
     
     echo "Running RAR repair command...\n";
     passthru($rar_cmd, $code);
+
+    if ($code === 10 || $code === 255) {
+        echo "ERROR: Archive is password protected but no password provided.\n";
+        echo "Use -p password to provide the password.\n";
+        exit(1);
+    }
 
     if ($code === 0) {
         echo "Repair completed successfully.\n";
@@ -2668,7 +2538,7 @@ function copy_file($source, $dest, $sudo_password = null) {
         $command = "cp --force $escaped_source $escaped_dest";
         
         $output = [];
-        exec("timeout 600 printf '%s\n' " . escapeshellarg($sudo_password) . " | sudo -p '' -S $command 2>/dev/null", $output, $code);
+        exec("printf '%s\n' " . escapeshellarg($sudo_password) . " | sudo -p '' -S $command 2>/dev/null", $output, $code);
         
         // If copy succeeded, fix ownership so RAR can read the file
         if ($code === 0) {
@@ -2677,11 +2547,7 @@ function copy_file($source, $dest, $sudo_password = null) {
             $chown_command = "chown $current_user:$current_user $escaped_dest";
             
             $output = [];
-            exec("timeout 600 printf '%s\n' " . escapeshellarg($sudo_password) . " | sudo -p '' -S $chown_command 2>/dev/null", $output, $code);
-            // Don't fail if chown fails, just log it
-            if ($code !== 0) {
-                error_log("Warning: Failed to fix ownership of $dest");
-            }
+            exec("printf '%s\n' " . escapeshellarg($sudo_password) . " | sudo -p '' -S $chown_command 2>/dev/null", $output, $code);
         }
         
         return $code === 0;
@@ -2702,17 +2568,17 @@ function is_file_readable($filepath, $sudo_password = null) {
     if (@is_readable($filepath)) {
         return true;
     }
-    
+
     // If failed and sudo is available, try with sudo
     if ($sudo_password !== null) {
         $escaped_filepath = escapeshellarg($filepath);
         $command = "test -r $escaped_filepath";
-        
+
         $output = [];
-        exec("timeout 600 printf '%s\n' " . escapeshellarg($sudo_password) . " | sudo -p '' -S $command 2>/dev/null", $output, $code);
+        exec("printf '%s\n' " . escapeshellarg($sudo_password) . " | sudo -p '' -S $command 2>/dev/null", $output, $code);
         return $code === 0;
     }
-    
+
     return false;
 }
 
@@ -2730,84 +2596,25 @@ function needs_sudo_permissions($folder) {
     if (!is_readable($folder)) {
         return true;
     }
-    
+
     // Do a comprehensive scan to see if we encounter any permission issues
     try {
         $iterator = new RecursiveIteratorIterator(
             new RecursiveDirectoryIterator($folder, RecursiveDirectoryIterator::SKIP_DOTS),
             RecursiveIteratorIterator::LEAVES_ONLY
         );
-        
-        // Check more items to get a better sample
-        $count = 0;
+
         foreach ($iterator as $file) {
             if (!$file->isReadable()) {
                 return true;
-            }
-            $count++;
-            if ($count >= 500) { // Increased sample size
-                break;
             }
         }
     } catch (UnexpectedValueException $e) {
         // Permission denied accessing directory
         return true;
     }
-    
-    return false;
-}
 
-/**
- * Perform a comprehensive sudo-enabled scan of the directory
- * 
- * Uses sudo to find all files and directories that would otherwise be inaccessible.
- * 
- * @param string $folder Directory to scan
- * @param string $sudo_password Sudo password
- * @return array Array containing 'files' and 'directories' lists
- */
-function sudo_scan_directory($folder, $sudo_password) {
-    $escaped_folder = escapeshellarg($folder);
-    $files = [];
-    $directories = [];
-    
-    // Test sudo access first
-    $test_command = "echo '$sudo_password' | sudo -S true 2>/dev/null";
-    exec($test_command, $test_output, $test_return);
-    
-    if ($test_return !== 0) {
-        echo "Sudo access test failed. Cannot proceed with sudo scan.\n";
-        return ['files' => [], 'directories' => []];
-    }
-    
-    // Use sudo to find all files
-    $command = "echo '$sudo_password' | sudo -S find $escaped_folder -type f 2>/dev/null";
-    $output = [];
-    $return_code = 0;
-    exec($command, $output, $return_code);
-    
-    if ($return_code === 0) {
-        $files = $output;
-    } else {
-        echo "File scan failed with return code: $return_code\n";
-    }
-    
-    // Use sudo to find all directories
-    $command = "echo '$sudo_password' | sudo -S find $escaped_folder -type d 2>/dev/null";
-    $output = [];
-    $return_code = 0;
-    exec($command, $output, $return_code);
-    
-    if ($return_code === 0) {
-        $directories = $output;
-    } else {
-        echo "Directory scan failed with return code: $return_code\n";
-    }
-    
-    return [
-        'files' => $files,
-        'directories' => $directories
-    ];
+    return false;
 }
 
 /**
@@ -2827,7 +2634,7 @@ function prompt_for_password_with_retry($archive_name, $test_function) {
     while ($attempt < $max_attempts) {
         $attempt++;
         
-        echo "Archive '$archive_name' is password protected.\n";
+        echo "Repository '$archive_name' is password protected.\n";
         echo "Enter password: ";
         
         // Hide input (only if we're in an interactive terminal)
@@ -2875,14 +2682,12 @@ function prompt_for_password_with_retry($archive_name, $test_function) {
  * @return bool True if password is correct, false otherwise
  */
 function test_archive_password($rarfile, $password) {
-    $rarfile_abs = get_rar_absolute_path($rarfile);
-    
-    if (!file_exists($rarfile_abs)) {
+    if (!file_exists($rarfile)) {
         return false;
     }
-    
+
     // Try to list archive contents with password
-    $rar_cmd = 'rar lb -inul -hp' . escapeshellarg($password) . ' ' . escapeshellarg($rarfile_abs) . ' 2>/dev/null';
+    $rar_cmd = 'rar lb -inul -hp' . escapeshellarg($password) . ' ' . escapeshellarg($rarfile) . ' 2>/dev/null';
     
     exec($rar_cmd, $output, $code);
     
@@ -2899,13 +2704,11 @@ function test_archive_password($rarfile, $password) {
  * @return int Size in bytes, or 0 if file doesn't exist
  */
 function get_archive_size($rarfile) {
-    $rarfile_abs = get_rar_absolute_path($rarfile);
-    
-    if (!file_exists($rarfile_abs)) {
+    if (!file_exists($rarfile)) {
         return 0;
     }
     
-    $stat = @stat($rarfile_abs);
+    $stat = @stat($rarfile);
     return $stat !== false ? $stat['size'] : 0;
 }
 
@@ -2922,12 +2725,12 @@ function get_archive_size($rarfile) {
 function calculate_compression_stats($original_size, $archive_size) {
     if ($original_size === 0) {
         return [
-            'ratio' => 0,
-            'difference' => 0,
-            'ratio_formatted' => '0%',
-            'difference_formatted' => '0 Bytes',
-            'original_formatted' => '0 Bytes',
-            'archive_formatted' => '0 Bytes'
+            'ratio'                 => 0,
+            'difference'            => 0,
+            'ratio_formatted'       => '0%',
+            'difference_formatted'  => '0 Bytes',
+            'original_formatted'    => '0 Bytes',
+            'archive_formatted'     => '0 Bytes'
         ];
     }
     
@@ -2938,12 +2741,12 @@ function calculate_compression_stats($original_size, $archive_size) {
     $difference = $original_size - $archive_size;
     
     return [
-        'ratio' => $ratio,
-        'difference' => $difference,
-        'ratio_formatted' => number_format($ratio, 1) . '%',
-        'difference_formatted' => format_file_size($difference),
-        'original_formatted' => format_file_size($original_size),
-        'archive_formatted' => format_file_size($archive_size)
+        'ratio'                 => $ratio,
+        'difference'            => $difference,
+        'ratio_formatted'       => number_format($ratio, 1) . '%',
+        'difference_formatted'  => format_file_size($difference),
+        'original_formatted'    => format_file_size($original_size),
+        'archive_formatted'     => format_file_size($archive_size)
     ];
 }
 
@@ -3001,7 +2804,6 @@ function create_progress_bar($current, $total, $width = PROGRESS_BAR_WIDTH, $spi
         $spinner = ' ' . $spinners[intval(microtime(true) * 10) % count($spinners)];
     }
     
-    //return sprintf("[%s] %3.1f%%%s", $bar, $percentage, $spinner);
     return sprintf("[%s] %.2f%%%s", $bar, $percentage, $spinner);
 }
 
@@ -3015,17 +2817,14 @@ function create_progress_bar($current, $total, $width = PROGRESS_BAR_WIDTH, $spi
  * @return bool True if successful, false otherwise
  */
 function execute_rar_with_progress($rar_cmd, $total_files) {
-    // Remove -inul to capture output for progress tracking
-    // $rar_cmd .= ' -inul';
-    
     // Start progress display
     $encryption_status = strpos($rar_cmd, ' -hp') !== false ? "encrypted " : "";
-    echo colorize("📦 Recording {$encryption_status}data to archive...", COLOR_CYAN) . "\n";
+    echo colorize("📦 Saving {$encryption_status}data to repository...", COLOR_CYAN) . "\n";
     
     // Execute RAR command and monitor output for progress
-    $start_time = microtime(true);
-    $output_lines = 0;
-    $expected_lines = $total_files + 20; // Much more realistic - just files + overhead
+    $start_time     = microtime(true);
+    $output_lines   = 0;
+    $expected_lines = $total_files + 20;
     
     // Start the RAR process
     $descriptors = [
@@ -3033,9 +2832,9 @@ function execute_rar_with_progress($rar_cmd, $total_files) {
         1 => ['pipe', 'w'],
         2 => ['pipe', 'w']
     ];
-    
+
     $process = proc_open($rar_cmd, $descriptors, $pipes);
-    
+
     if (!is_resource($process)) {
         return false;
     }
@@ -3047,14 +2846,15 @@ function execute_rar_with_progress($rar_cmd, $total_files) {
     stream_set_blocking($pipes[1], false);
     stream_set_blocking($pipes[2], false);
     
-    $current_progress = 0;
-    $output_buffer = '';
-    $output_lines = 0;
-    $progress = 0;
+    $current_progress   = 0;
+    $output_buffer      = '';
+    $output_lines       = 0;
+    $progress           = 0;
 
     while (true) {
         // Check if process is still running
         $status = proc_get_status($process);
+
         if (!$status['running']) {
             // After the process exits, there may be a little buffered output to consume:
             while (($output = fgets($pipes[1])) !== false) {
@@ -3064,14 +2864,15 @@ function execute_rar_with_progress($rar_cmd, $total_files) {
         }
 
         // Prepare for stream_select
-        $read = [$pipes[1]];
-        $write = null;
+        $read   = [$pipes[1]];
+        $write  = null;
         $except = null;
 
-        $ready = @stream_select($read, $write, $except, 0, 50000);
+        $ready  = @stream_select($read, $write, $except, 0, 50000);
 
         if ($ready && $ready > 0) {
             $output = fgets($pipes[1]);
+
             if ($output !== false) {
                 $output_buffer .= $output;
                 // Now count lines (handle multiple lines at once)
@@ -3084,9 +2885,10 @@ function execute_rar_with_progress($rar_cmd, $total_files) {
                         $output_lines++;
                     }
                 }
+
                 // Calculate progress
-                //$progress = min(100, max(0, intval(($output_lines / $expected_lines) * 100)));
                 $progress = min(100, max(0, ($output_lines / $expected_lines) * 100));
+
                 if ($progress !== $current_progress) {
                     echo "\r" . create_progress_bar($progress, 100, PROGRESS_BAR_WIDTH, true);
                     $current_progress = $progress;
@@ -3098,23 +2900,16 @@ function execute_rar_with_progress($rar_cmd, $total_files) {
         }
     }
 
-    // After loop, flush any remaining lines in buffer
-    // if (trim($output_buffer) !== '') {
-    //     $output_lines++;
-    //     $progress = min(95, max(5, intval(($output_lines / $expected_lines) * 100)));
-    //     echo "\r" . create_progress_bar($progress, 100, PROGRESS_BAR_WIDTH, true);
-    // }
-    
     // Close pipes
     fclose($pipes[1]);
     fclose($pipes[2]);
-    
+
     // Get return code
     $return_code = proc_close($process);
-    
+
     // Show completion
     echo "\r" . create_progress_bar(100, 100, PROGRESS_BAR_WIDTH, false) . "\n";
-    
+
     return $return_code === 0;
 }
 
@@ -3129,18 +2924,14 @@ function execute_rar_with_progress($rar_cmd, $total_files) {
  * @return bool True if successful, false otherwise
  */
 function execute_rar_extract_with_progress($rar_cmd, $total_files) {
-    // Remove output suppression flags to capture output for progress tracking
-    $rar_cmd = str_replace(' -inul', '', $rar_cmd);
-    $rar_cmd = str_replace(' -idq', '', $rar_cmd);
-
     // Start progress display
     $encryption_status = strpos($rar_cmd, ' -hp') !== false ? "encrypted " : "";
-    //echo colorize("📦 Extracting {$encryption_status}data from archive...", COLOR_CYAN) . "\n";
+    //echo colorize("📦 Extracting {$encryption_status}data from repository...", COLOR_CYAN) . "\n";
     
     // Execute RAR command and monitor output for progress
-    $start_time = microtime(true);
-    $extracted_files = 0;
-    $expected_files = $total_files;
+    $start_time         = microtime(true);
+    $extracted_files    = 0;
+    $expected_files     = $total_files;
     
     // Start the RAR process
     $descriptors = [
@@ -3162,13 +2953,14 @@ function execute_rar_extract_with_progress($rar_cmd, $total_files) {
     stream_set_blocking($pipes[1], false);
     stream_set_blocking($pipes[2], false);
 
-    $current_progress = 0;
-    $output_buffer = '';
-    $progress = 0;
+    $current_progress   = 0;
+    $output_buffer      = '';
+    $progress           = 0;
 
     while (true) {
         // Check if process is still running
         $status = proc_get_status($process);
+
         if (!$status['running']) {
             // After the process exits, there may be a little buffered output to consume:
             while (($output = fgets($pipes[1])) !== false) {
@@ -3178,14 +2970,15 @@ function execute_rar_extract_with_progress($rar_cmd, $total_files) {
         }
 
         // Prepare for stream_select
-        $read = [$pipes[1]];
-        $write = null;
+        $read   = [$pipes[1]];
+        $write  = null;
         $except = null;
 
-        $ready = stream_select($read, $write, $except, 0, 50000);
+        $ready  = stream_select($read, $write, $except, 0, 50000);
 
         if ($ready && $ready > 0) {
             $output = fgets($pipes[1]);
+
             if ($output !== false) {
                 $output_buffer .= $output;
                 // Now count extracted files (handle multiple lines at once)
@@ -3201,6 +2994,7 @@ function execute_rar_extract_with_progress($rar_cmd, $total_files) {
                 }
                 // Calculate progress
                 $progress = $expected_files > 0 ? min(100, max(0, ($extracted_files / $expected_files) * 100)) : 0;
+
                 if ($progress !== $current_progress) {
                     echo "\r" . create_progress_bar($progress, 100, PROGRESS_BAR_WIDTH, true);
                     $current_progress = $progress;
@@ -3233,27 +3027,26 @@ function execute_rar_extract_with_progress($rar_cmd, $total_files) {
  */
 function format_duration($seconds) {
     if ($seconds < 60) {
-        return number_format($seconds, 2) . ' seconds';
+        return $seconds . ' seconds';
     }
-    
-    $hours = intval($seconds / 3600);
-    $minutes = intval(($seconds % 3600) / 60);
-    $remaining_seconds = $seconds % 60;
-    
-    $parts = [];
-    
+
+    $hours      = intval($seconds / 3600);
+    $minutes    = intval(($seconds % 3600) / 60);
+    $r_secs     = $seconds % 60;
+    $parts      = [];
+
     if ($hours > 0) {
         $parts[] = $hours . ' hour' . ($hours > 1 ? 's' : '');
     }
-    
+
     if ($minutes > 0) {
         $parts[] = $minutes . ' minute' . ($minutes > 1 ? 's' : '');
     }
-    
-    if ($remaining_seconds > 0 || count($parts) === 0) {
-        $parts[] = number_format($remaining_seconds, 2) . ' second' . ($remaining_seconds != 1 ? 's' : '');
+
+    if ($r_secs > 0 || count($parts) === 0) {
+        $parts[] = round($r_secs) . ' second' . ($r_secs != 1 ? 's' : '');
     }
-    
+
     return implode(', ', $parts);
 }
 
@@ -3303,15 +3096,15 @@ function print_table_row($columns, $widths, $separator = '  ') {
  * @return void
  */
 function print_header($text, $char = '=', $width = 60) {
-    $text_length = strlen($text) + 4; // '  ' before and after
-    $line_length = max($width, $text_length);
-    $line = str_repeat($char, $line_length);
+    $text_length    = strlen($text) + 4; // '  ' before and after
+    $line_length    = max($width, $text_length);
+    $line           = str_repeat($char, $line_length);
 
     // Center the text within $line_length
-    $padding = $line_length - strlen($text);
-    $left = floor($padding / 2);
-    $right = $padding - $left;
-    $centered_text = str_repeat(' ', $left - 1) . $text . str_repeat(' ', $right - 1);
+    $padding        = $line_length - strlen($text);
+    $left           = floor($padding / 2);
+    $right          = $padding - $left;
+    $centered_text  = str_repeat(' ', $left - 1) . $text . str_repeat(' ', $right - 1);
 
     echo "\n" . colorize($line, COLOR_CYAN) . "\n";
     echo colorize($centered_text, COLOR_BOLD . COLOR_CYAN) . "\n";
