@@ -47,6 +47,81 @@
  */
 
 /**
+ * Redundant information (recovery record) may be added to RAR archive. While it increases the archive 
+ * size, it helps to recover archived files in case of disk failure or data loss of other kind, provided that damage
+ *  is not too severe. Such damage recovery can be done with command "r". ZIP archive format does not support 
+ * the recovery record.
+ *
+ * Records are most efficient if data positions in damaged archive are not shifted. If you copy an archive from 
+ * damaged media using some special software and if you have a choice to fill damaged areas with zeroes or to 
+ * cut out them from copied file, filling with zeroes or any other value is preferable, because it allows to 
+ * preserve original data positions. Still, even though it is not an optimal mode, both versions attempt to
+ * repair data even in case of deletions or insertions of reasonable size, when data positions were shifted.
+ */
+define('RECOVERY_RECORD_SIZE', 6); // Set as a percentage
+define('PROGRESS_BAR_WIDTH', 49); // Sets the width of the progress bar in the terminal
+define('MD5_TIMEOUT', 600); // Maximum time in seconds to calculate MD5 hash of a file
+
+define('USAGE_TEXT', <<<USAGE
+Usage:
+  php {$argv[0]} commit <folder> <archive.rar> [comment] [-p password] [--follow-symlinks] [--low-priority]
+  php {$argv[0]} list <archive.rar> [-p password]
+  php {$argv[0]} checkout <snapshot_id> <archive.rar> <checkout_folder> [-p password] [--low-priority]
+  php {$argv[0]} diff <version1> <version2> <archive.rar> [-p password]
+  php {$argv[0]} status <folder> <archive.rar> [-p password] [--include-meta] [--checksum]
+  php {$argv[0]} repair <archive.rar> [-p password] [--low-priority]
+
+When creating a backup, you can optionally provide a comment describing the backup.
+Comments are displayed when listing available versions.
+
+Options:
+  -p password          Password for archive encryption/access
+  --follow-symlinks    Follow symbolic links and backup their contents
+                       (default: symlinks are detected but not backed up)
+  --force-directory    Force directory creation instead of symlink recreation during checkout
+  --low-priority       Use lower CPU priority (nice level 10) to avoid
+                       impacting other system processes
+  --include-meta       Include metadata changes (permissions, ownership) in status command
+  --checksum           Detect files with changed content but unchanged modification dates
+
+Password can be provided via:
+  - Command line argument: -p password
+
+Examples:
+  php {$argv[0]} commit /home/user/documents archive.rar "Daily Commit" -p password
+  php {$argv[0]} commit /var/www/domain.com archive.rar "Website Commit" -p password --low-priority
+  php {$argv[0]} commit /path/with/symlinks archive.rar "Symlink Commit" --follow-symlinks
+  php {$argv[0]} list archive.rar -p password
+  php {$argv[0]} checkout 1 archive.rar /checkout/path -p password --low-priority
+  php {$argv[0]} checkout 1 archive.rar /checkout/path -p password --force-directory
+  php {$argv[0]} diff 1 4 archive.rar -p password
+  php {$argv[0]} status /home/user/documents archive.rar -p password --include-meta --checksum
+  php {$argv[0]} repair archive.rar -p password --low-priority
+  
+USAGE);
+
+define('README_TEXT', <<<README
+This archive was created by bitfreeze.php.
+
+To checkout or list contents, extract bitfreeze.php from this archive and run:
+
+    php bitfreeze.php list <this-archive.rar>
+    php bitfreeze.php checkout <snapshot_id> <this-archive.rar> <output-folder>
+
+For example:
+    rar e <this-archive.rar> bitfreeze.php
+    php bitfreeze.php list <this-archive.rar>
+    php bitfreeze.php checkout 1 <this-archive.rar> checked-out/
+
+For full usage:
+    php bitfreeze.php
+
+---
+Files are stored as content hashes in 'files/' and snapshot manifests in 'versions/'.
+Comments are stored as .comment files alongside manifests.
+README);
+
+/**
  * Terminal color and formatting functions
  * 
  * Provides ANSI color codes and formatting utilities for beautiful output
@@ -77,73 +152,6 @@ define('COLOR_BG_BLUE', "\033[44m");
 define('COLOR_BG_MAGENTA', "\033[45m");
 define('COLOR_BG_CYAN', "\033[46m");
 define('COLOR_BG_WHITE', "\033[47m");
-
-/**
- * Redundant information (recovery record) may be added to RAR archive. While it increases the archive 
- * size, it helps to recover archived files in case of disk failure or data loss of other kind, provided that damage
- *  is not too severe. Such damage recovery can be done with command "r". ZIP archive format does not support 
- * the recovery record.
- *
- * Records are most efficient if data positions in damaged archive are not shifted. If you copy an archive from 
- * damaged media using some special software and if you have a choice to fill damaged areas with zeroes or to 
- * cut out them from copied file, filling with zeroes or any other value is preferable, because it allows to 
- * preserve original data positions. Still, even though it is not an optimal mode, both versions attempt to
- * repair data even in case of deletions or insertions of reasonable size, when data positions were shifted.
- */
-define('RECOVERY_RECORD_SIZE', 6); // Set as a percentage
-define('PROGRESS_BAR_WIDTH', 49);
-
-define('USAGE_TEXT', <<<USAGE
-Usage:
-  php {$argv[0]} commit <folder> <archive.rar> [comment] [-p password] [--follow-symlinks] [--low-priority]
-  php {$argv[0]} list <archive.rar> [-p password]
-  php {$argv[0]} checkout <snapshot_id> <archive.rar> <checkout_folder> [-p password] [--low-priority]
-  php {$argv[0]} diff <version1> <version2> <archive.rar> [-p password]
-  php {$argv[0]} repair <archive.rar> [-p password] [--low-priority]
-
-When creating a backup, you can optionally provide a comment describing the backup.
-Comments are displayed when listing available versions.
-
-Options:
-  -p password          Password for archive encryption/access
-  --follow-symlinks    Follow symbolic links and backup their contents
-                       (default: symlinks are detected but not backed up)
-  --low-priority       Use lower CPU priority (nice level 10) to avoid
-                       impacting other system processes
-
-Password can be provided via:
-  - Command line argument: -p password
-
-Examples:
-  php {$argv[0]} commit /home/user/documents archive.rar "Daily Snapshot" -p password
-  php {$argv[0]} commit /var/www/domain.com archive.rar "Website Snapshot" -p password --low-priority
-  php {$argv[0]} list archive.rar -p password
-  php {$argv[0]} checkout 1 archive.rar /checkout/path -p password --low-priority
-  php {$argv[0]} diff 1 4 archive.rar -p password
-  php {$argv[0]} repair archive.rar -p password --low-priority
-  
-USAGE);
-
-define('README_TEXT', <<<README
-This archive was created by bitfreeze.php.
-
-To checkout or list contents, extract bitfreeze.php from this archive and run:
-
-    php bitfreeze.php list <this-archive.rar>
-    php bitfreeze.php checkout <snapshot_id> <this-archive.rar> <output-folder>
-
-For example:
-    rar e <this-archive.rar> bitfreeze.php
-    php bitfreeze.php list <this-archive.rar>
-    php bitfreeze.php checkout 1 <this-archive.rar> checked-out/
-
-For full usage:
-    php bitfreeze.php
-
----
-Files are stored as content hashes in 'files/' and snapshot manifests in 'versions/'.
-Comments are stored as .comment files alongside manifests.
-README);
 
 if (!defined('STDIN')) {
     echo "NOTICE: STDIN not defined, using php://stdin\n";
@@ -960,6 +968,19 @@ function has_follow_symlinks() {
 }
 
 /**
+ * Check if --force-directory argument is present
+ * 
+ * Searches for the --force-directory argument in the command line arguments.
+ * 
+ * @return bool True if --force-directory is present
+ */
+function has_force_directory() {
+    global $argv;
+    
+    return in_array('--force-directory', $argv);
+}
+
+/**
  * Create symlink manifest entry
  * 
  * Creates a manifest entry for symbolic links with metadata.
@@ -1043,8 +1064,8 @@ $cleaned_argv   = clean_argv();
 
 switch ($cmd) {
     case 'commit':
-        if (count($cleaned_argv) < 4 || count($cleaned_argv) > 6) usage();
-        $comment = count($cleaned_argv) >= 5 ? $cleaned_argv[4] : "Automated Snapshot";
+        if (count($cleaned_argv) < 4 || count($cleaned_argv) > 7) usage();
+        $comment = count($cleaned_argv) >= 5 ? $cleaned_argv[4] : "Automated Commit";
         $password = get_password_with_detection(get_absolute_path($cleaned_argv[3]));
         commit($cleaned_argv[2], get_absolute_path($cleaned_argv[3]), $comment, $password);
         break;
@@ -1054,7 +1075,7 @@ switch ($cmd) {
         list_versions(get_absolute_path($cleaned_argv[2]), $password);
         break;
     case 'checkout':
-        if (count($cleaned_argv) !== 5) usage();
+        if (count($cleaned_argv) < 5 || count($cleaned_argv) > 6) usage();
         $repository = get_absolute_path($cleaned_argv[3]);
         $password = get_password_with_detection($repository);
 
@@ -1070,6 +1091,13 @@ switch ($cmd) {
         if (count($cleaned_argv) !== 5) usage();
         $password = get_password_with_detection(get_absolute_path($cleaned_argv[4]));
         diff_versions($cleaned_argv[2], $cleaned_argv[3], get_absolute_path($cleaned_argv[4]), $password);
+        break;
+    case 'status':
+        if (count($cleaned_argv) < 4 || count($cleaned_argv) > 6) usage();
+        $password = get_password_with_detection(get_absolute_path($cleaned_argv[3]));
+        $include_meta = in_array('--include-meta', $cleaned_argv);
+        $include_checksum = in_array('--checksum', $cleaned_argv);
+        status($cleaned_argv[2], get_absolute_path($cleaned_argv[3]), $password, $include_meta, $include_checksum);
         break;
     case 'repair':
         if (count($cleaned_argv) !== 3) usage();
@@ -1158,10 +1186,10 @@ function scanDirGeneratorForDirs($dir, $sudo_password = null) {
 }
 
 /**
- * Commit a new snapshot of the specified folder to the archive
+ * Commit a new version of the specified folder to the archive
  * 
  * Scans the source folder, creates a manifest of all files and directories,
- * deduplicates files using MD5 hashes, and creates a new snapshot in the
+ * deduplicates files using MD5 hashes, and creates a new commit in the
  * RAR archive. Includes comment support and password protection.
  * 
  * @param string $folder Source folder to backup
@@ -1181,7 +1209,7 @@ function commit($folder, $rarfile, $comment, $password = null) {
 
     // Use provided comment or default
     if (empty($comment)) {
-        $comment = "Automated Snapshot";
+        $comment = "Automated Commit";
     }
 
     $start = microtime(true);
@@ -1233,9 +1261,12 @@ function commit($folder, $rarfile, $comment, $password = null) {
             $symlink_count++;
             
             if ($follow_symlinks) {
-                // Follow the symlink and backup its target
+                // Enhanced symlink handling: store both symlink info AND target files
                 $target_path = readlink($fullpath);
                 $real_target = realpath($fullpath);
+                
+                // Always store the symlink information for checkout
+                $manifest[] = create_symlink_entry($rel, $fullpath, $sudo_password);
                 
                 if ($real_target && file_exists($real_target)) {
                     // Check if target is within the backup scope
@@ -1410,16 +1441,16 @@ function commit($folder, $rarfile, $comment, $password = null) {
     $current_manifest_content = implode("\n", $manifest) . "\n";
     
     if ($last_manifest && $last_manifest['content'] === $current_manifest_content) {
-        echo "Last Commit:      {$last_manifest['name']}\n";
+        echo "Last Commit:      " . format_commit_display($last_manifest) . "\n";
         echo "Comment:          $comment\n\n";
-        echo "NOTE: No changes detected since last backup. Skipping snapshot creation.\n";
+        echo "NOTE: No changes detected since last commit. Exiting.\n";
         
         // Clean up temp
         exec('rm -rf ' . escapeshellarg($temp));
         return;
     }
 
-    // Snapshot name/id
+    // Commit name/id
     $snapshot_id        = get_next_snapshot_id($rarfile, $password);
     $timestamp          = date('Y-m-d H:i:s');
     $manifest_filename  = "{$snapshot_id}-{$timestamp}.txt";
@@ -1463,7 +1494,7 @@ function commit($folder, $rarfile, $comment, $password = null) {
     chdir($cwd);
 
     if (!$rar_success) {
-        print_error("❌ Failed to commit snapshot to RAR archive!");
+        print_error("❌ Failed to commit to RAR repository!");
         exec('rm -rf ' . escapeshellarg($temp));
         exit(1);
     }
@@ -1558,6 +1589,301 @@ function commit($folder, $rarfile, $comment, $password = null) {
 }
 
 /**
+ * Status command - compare current folder state with latest repository commit
+ * 
+ * Analyzes the current state of a folder and compares it with the latest
+ * commit in the repository to identify new, modified, deleted, metadata-changed, and corrupted files.
+ * 
+ * @param string $folder Path to the folder to analyze
+ * @param string $rarfile Path to the RAR archive
+ * @param string|null $password Password for archive access
+ * @param bool $include_meta Whether to include metadata changes (permissions, ownership)
+ * @param bool $include_checksum Whether to detect files with changed content but unchanged dates
+ * @return void
+ */
+function status($folder, $rarfile, $password = null, $include_meta = false, $include_checksum = false) {
+    $real_folder = realpath($folder);
+    if ($real_folder === false) {
+        echo "ERROR: Folder '{$folder}' does not exist.\n";
+        exit(1);
+    }
+    $folder = rtrim($real_folder, '/');
+
+    if (!is_dir($folder)) {
+        echo "ERROR: Folder '{$folder}' does not exist.\n";
+        exit(1);
+    }
+
+    if (!file_exists($rarfile)) {
+        echo "ERROR: Archive '{$rarfile}' does not exist.\n";
+        exit(1);
+    }
+
+    print_header("STATUS ANALYSIS");
+    print_info("🔍 Analyzing folder: $folder");
+    print_info("📦 Archive: $rarfile");
+
+    // Check if sudo permissions will be needed early
+    $sudo_password = null;
+    
+    if (needs_sudo_permissions($folder)) {
+        $sudo_password = prompt_for_sudo_password();
+    }
+
+    // Get the latest manifest from the repository
+    $latest_manifest = get_last_manifest($rarfile, $password);
+    
+    if (!$latest_manifest) {
+        echo "ERROR: No commits found in repository.\n";
+        exit(1);
+    }
+
+    print_info("📋 Latest " . format_commit_display($latest_manifest));
+
+    // Extract the latest manifest to temp
+    $temp = sys_get_temp_dir() . '/rarrepo_status_' . uniqid(mt_rand(), true);
+    mkdir($temp, 0700, true);
+
+    $rar_cmd = 'rar e -inul';
+    if ($password) {
+        $rar_cmd .= ' -hp' . escapeshellarg($password);
+    }
+    $rar_cmd .= ' ' . escapeshellarg($rarfile) . ' ' . escapeshellarg($latest_manifest['name']) . ' ' . escapeshellarg($temp);
+
+    exec($rar_cmd, $output, $code);
+
+    if ($code !== 0) {
+        echo "ERROR: Failed to extract manifest from archive.\n";
+        exec('rm -rf ' . escapeshellarg($temp));
+        exit(1);
+    }
+
+    $manifest_path = "$temp/" . basename($latest_manifest['name']);
+
+    if (!file_exists($manifest_path)) {
+        echo "ERROR: Manifest not extracted.\n";
+        exec('rm -rf ' . escapeshellarg($temp));
+        exit(1);
+    }
+
+    // Parse the manifest
+    $manifest_lines = file($manifest_path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    $archive_files = [];
+    
+    foreach ($manifest_lines as $line) {
+        $entry = parse_manifest_entry($line);
+        if ($entry && isset($entry['path'])) {
+            $archive_files[$entry['path']] = $entry;
+        }
+    }
+
+    // Scan current folder
+    $current_files = [];
+    $current_dirs = [];
+    
+    foreach (scanDirGenerator($folder, $sudo_password) as $filepath) {
+        $file = new SplFileInfo($filepath);
+        $fullpath = $file->getPathname();
+        $rel = ltrim(substr($fullpath, strlen($folder)), '/');
+        
+        if ($file->isFile()) {
+            $current_files[$rel] = [
+                'path' => $rel,
+                'fullpath' => $fullpath,
+                'is_file' => true
+            ];
+        } elseif ($file->isDir()) {
+            $current_dirs[$rel] = true;
+        }
+    }
+
+    // Add directories from manifest that don't exist in current scan
+    foreach ($archive_files as $path => $entry) {
+        if (isset($entry['hash']) && $entry['hash'] === '[DIR]') {
+            $current_dirs[$path] = true;
+        }
+    }
+
+    // Analyze changes
+    $new_files = [];
+    $modified_files = [];
+    $deleted_files = [];
+    $meta_changed_files = [];
+    $checksum_changed_files = [];
+
+    // Find new and modified files
+    foreach ($current_files as $rel_path => $file_info) {
+        if (!isset($archive_files[$rel_path])) {
+            $new_files[] = $rel_path;
+        } else {
+            $archive_entry = $archive_files[$rel_path];
+            
+            // Check if file content has changed
+            $current_md5 = get_file_md5($file_info['fullpath'], $sudo_password);
+            if ($current_md5 !== false && $current_md5 !== $archive_entry['hash']) {
+                // Check if this is a checksum change (content changed but date didn't)
+                if ($include_checksum) {
+                    $current_meta = get_file_metadata($file_info['fullpath'], $sudo_password);
+                    $archive_meta = $archive_entry['metadata'];
+                    
+                    if ($current_meta['mtime'] === $archive_meta['mtime']) {
+                        // Content changed but modification date is the same - possible corruption!
+                        $checksum_changed_files[] = [
+                            'path' => $rel_path,
+                            'current_hash' => $current_md5,
+                            'archive_hash' => $archive_entry['hash'],
+                            'mtime' => $current_meta['mtime']
+                        ];
+                    } else {
+                        // Normal modification - content and date both changed
+                        $modified_files[] = $rel_path;
+                    }
+                } else {
+                    // Checksum detection not enabled, treat as normal modification
+                    $modified_files[] = $rel_path;
+                }
+            } elseif ($include_meta) {
+                // Check metadata changes
+                $current_meta = get_file_metadata($file_info['fullpath'], $sudo_password);
+                $archive_meta = $archive_entry['metadata'];
+                
+                if ($current_meta['permissions'] !== $archive_meta['permissions'] ||
+                    $current_meta['owner'] !== $archive_meta['owner'] ||
+                    $current_meta['group'] !== $archive_meta['group']) {
+                    
+                    $meta_changed_files[] = [
+                        'path' => $rel_path,
+                        'current' => $current_meta,
+                        'archive' => $archive_meta
+                    ];
+                }
+            }
+        }
+    }
+
+    // Find deleted files
+    foreach ($archive_files as $rel_path => $entry) {
+        if (isset($entry['hash']) && $entry['hash'] !== '[DIR]' && !isset($current_files[$rel_path])) {
+            $deleted_files[] = $rel_path;
+        }
+    }
+
+    // Display results
+    print_header("CHANGES DETECTED");
+
+    // New files
+    if (!empty($new_files)) {
+        print_header("NEW FILES", "-", 50);
+        foreach ($new_files as $file) {
+            echo "  + $file\n";
+        }
+    } else {
+        print_header("NEW FILES", "-", 50);
+        echo "  ✅ No new files\n";
+    }
+
+    // Modified files
+    if (!empty($modified_files)) {
+        print_header("MODIFIED FILES", "-", 50);
+        foreach ($modified_files as $file) {
+            echo "  ~ $file\n";
+        }
+    } else {
+        print_header("MODIFIED FILES", "-", 50);
+        echo "  ✅ No modified files\n";
+    }
+
+    // Deleted files
+    if (!empty($deleted_files)) {
+        print_header("DELETED FILES", "-", 50);
+        foreach ($deleted_files as $file) {
+            echo "  - $file\n";
+        }
+    } else {
+        print_header("DELETED FILES", "-", 50);
+        echo "  ✅ No deleted files\n";
+    }
+
+    // Metadata changes
+    if ($include_meta && !empty($meta_changed_files)) {
+        print_header("METADATA CHANGES", "-", 50);
+        foreach ($meta_changed_files as $change) {
+            echo "  🔄 {$change['path']}\n";
+            
+            $current = $change['current'];
+            $archive = $change['archive'];
+            
+            if ($current['permissions'] !== $archive['permissions']) {
+                echo "     Permissions: {$archive['permissions']} → {$current['permissions']}\n";
+            }
+            if ($current['owner'] !== $archive['owner']) {
+                echo "     Owner: {$archive['owner']} → {$current['owner']}\n";
+            }
+            if ($current['group'] !== $archive['group']) {
+                echo "     Group: {$archive['group']} → {$current['group']}\n";
+            }
+            echo "\n";
+        }
+    } elseif ($include_meta) {
+        print_header("METADATA CHANGES", "-", 50);
+        echo "  ✅ No metadata changes\n";
+    }
+
+    // Checksum changes (content changed but date didn't)
+    if ($include_checksum && !empty($checksum_changed_files)) {
+        // Custom red header for checksum changes
+        $header_text = "CHECKSUM CHANGES";
+        $line_length = max(50, strlen($header_text) + 4);
+        $line = str_repeat('!', $line_length);
+        $padding = $line_length - strlen($header_text);
+        $left = floor($padding / 2);
+        $right = $padding - $left;
+        $centered_text = str_repeat(' ', $left - 1) . $header_text . str_repeat(' ', $right - 1);
+        
+        echo "\n" . colorize($line, COLOR_RED) . "\n";
+        echo colorize($centered_text, COLOR_BOLD . COLOR_RED) . "\n";
+        echo colorize($line, COLOR_RED) . "\n\n";
+        
+        print_warning("⚠️  Files with changed content but unchanged modification dates:");
+        foreach ($checksum_changed_files as $change) {
+            echo colorize("  🔍 {$change['path']}", COLOR_YELLOW) . "\n";
+            echo colorize("     Current Hash: {$change['current_hash']}", COLOR_YELLOW) . "\n";
+            echo colorize("     Archive Hash: {$change['archive_hash']}", COLOR_YELLOW) . "\n";
+            echo colorize("     Modification Date: " . date('Y-m-d H:i:s', $change['mtime']), COLOR_YELLOW) . "\n\n";
+        }
+    } elseif ($include_checksum) {
+        print_header("CHECKSUM CHANGES", "!", 50);
+        echo "  ✅ No checksum changes detected\n";
+    }
+
+    // Summary
+    print_header("SUMMARY");
+    $summary_data = [
+        ['New Files', count($new_files)],
+        ['Modified Files', count($modified_files)],
+        ['Deleted Files', count($deleted_files)]
+    ];
+    
+    if ($include_meta) {
+        $summary_data[] = ['Metadata Changes', count($meta_changed_files)];
+    }
+    
+    if ($include_checksum) {
+        $summary_data[] = ['Checksum Changes', count($checksum_changed_files)];
+    }
+    
+    $summary_data[] = ['Total Changes', count($new_files) + count($modified_files) + count($deleted_files) + ($include_meta ? count($meta_changed_files) : 0) + ($include_checksum ? count($checksum_changed_files) : 0)];
+    
+    $widths = [20, 10];
+    foreach ($summary_data as $row) {
+        print_table_row($row, $widths);
+    }
+
+    // Clean up
+    exec('rm -rf ' . escapeshellarg($temp));
+}
+
+/**
  * Get existing file hashes from the RAR archive
  * 
  * Lists all files in the archive's 'files/' directory and returns
@@ -1602,14 +1928,14 @@ function get_archive_hashes($rarfile, $password = null) {
 }
 
 /**
- * Get the next available snapshot ID
+ * Get the next available commit ID
  * 
- * Scans existing snapshots in the archive and returns the next
- * available ID number for creating a new snapshot.
+ * Scans existing commits in the archive and returns the next
+ * available ID number for creating a new commit.
  * 
  * @param string $rarfile RAR archive file path
  * @param string|null $password Password for archive access
- * @return int Next available snapshot ID
+ * @return int Next available commit ID
  */
 function get_next_snapshot_id($rarfile, $password = null) {
     $max = 0;
@@ -1820,7 +2146,7 @@ function checkout($snapshot_id, $rarfile, $outdir, $password = null) {
     }
 
     if (!$manifest) {
-        echo "Snapshot ID $snapshot_id not found.\n";
+        echo "Commit ID $snapshot_id not found.\n";
         exit(1);
     }
 
@@ -1871,6 +2197,7 @@ function checkout($snapshot_id, $rarfile, $outdir, $password = null) {
     $hashmap        = []; // hash => [path1, path2,...]
     $restorelist    = [];
     $dir_metadata   = []; // Store directory metadata for restoration after files
+    $symlink_fallback_dirs = []; // Track symlinks that fell back to directories
     $lines          = file($manifest_path, FILE_IGNORE_NEW_LINES|FILE_SKIP_EMPTY_LINES);
     
     // Get current user info for permission restoration
@@ -1901,39 +2228,43 @@ function checkout($snapshot_id, $rarfile, $outdir, $password = null) {
 
             continue;
         } elseif (isset($entry['type']) && $entry['type'] === '[LINK]') {
-            // Handle symbolic links
+            // Enhanced symlink handling with fallback to directory
             $link_path  = rtrim($outdir, '/') . '/' . $entry['path'];
             $link_dir   = dirname($link_path);
+            $force_dir  = has_force_directory();
 
             if (!is_dir($link_dir)) {
                 mkdir($link_dir, 0755, true);
             }
 
-            if (!symlink_exists_and_points_to($link_path, $entry['target'])) {
-                // Try native symlink
-                if (!@symlink($entry['target'], $link_path)) {
-                    $escaped_target = escapeshellarg($entry['target']);
-                    $escaped_link_path = escapeshellarg($link_path);
+            $symlink_created = false;
+            
+            if (!$force_dir) {
+                // Attempt to recreate the symlink
+                if (!symlink_exists_and_points_to($link_path, $entry['target'])) {
+                    // Try native symlink
+                    if (!@symlink($entry['target'], $link_path)) {
+                        $escaped_target = escapeshellarg($entry['target']);
+                        $escaped_link_path = escapeshellarg($link_path);
 
-                    if ($sudo_password !== null) {
-                        // Try with sudo
-                        $result = execute_with_sudo("ln -s $escaped_target $escaped_link_path", $sudo_password);
-                    } else {
-                        // Try with direct exec
-                        exec("ln -s $escaped_target $escaped_link_path", $output, $ln_result);
+                        if ($sudo_password !== null) {
+                            // Try with sudo
+                            $result = execute_with_sudo("ln -s $escaped_target $escaped_link_path", $sudo_password);
+                        } else {
+                            // Try with direct exec
+                            exec("ln -s $escaped_target $escaped_link_path", $output, $ln_result);
+                        }
                     }
+                }
+
+                if (symlink_exists_and_points_to($link_path, $entry['target'])) {
+                    $symlink_created = true;
+                    print_success("✅ Symlink created: {$entry['path']} -> {$entry['target']}");
                 }
             }
 
-            if (symlink_exists_and_points_to($link_path, $entry['target'])) {
-                $created = true;
-            } else {
-                $created = false;
-                echo "[WARNING] Could not create symlink: {$entry['path']} -> {$entry['target']}\n";
-            }
-
             // If symlink was created, restore metadata
-            if (symlink_exists_and_points_to($link_path, $entry['target']) && isset($entry['metadata'])) {
+            if ($symlink_created && isset($entry['metadata'])) {
                 $owner_id = is_numeric($entry['metadata']['owner']) ?
                     $entry['metadata']['owner'] :
                     (function_exists('posix_getpwnam') ? (posix_getpwnam($entry['metadata']['owner'])['uid'] ?? null) : null);
@@ -1956,6 +2287,24 @@ function checkout($snapshot_id, $rarfile, $outdir, $password = null) {
                         execute_with_sudo("lchgrp $group_id " . escapeshellarg($link_path), $sudo_password);
                     }
                 }
+            }
+            
+            if (!$symlink_created) {
+                // Symlink creation failed or --force-directory was used
+                if ($force_dir) {
+                    print_warning("⚠️  Force directory mode: Creating directory instead of symlink for {$entry['path']}");
+                } else {
+                    print_warning("⚠️  Symlink creation failed for {$entry['path']} -> {$entry['target']}");
+                    print_warning("   Falling back to directory creation. Files will be restored directly.");
+                }
+                
+                // Create directory for file restoration
+                if (!is_dir($link_path)) {
+                    mkdir($link_path, 0755, true);
+                }
+                
+                // Mark this path as a directory for file restoration
+                $symlink_fallback_dirs[$entry['path']] = true;
             }
             
             continue;
@@ -2013,6 +2362,16 @@ function checkout($snapshot_id, $rarfile, $outdir, $password = null) {
         $src        = "$temp/$md5";
         $dest       = rtrim($outdir, '/') . '/' . $path;
         $destdir    = dirname($dest);
+
+        // Check if this file should be restored to a symlink fallback directory
+        $symlink_fallback_path = null;
+        foreach ($symlink_fallback_dirs as $fallback_dir => $dummy) {
+            if (strpos($path, $fallback_dir . '/') === 0) {
+                // This file belongs to a symlink that fell back to directory
+                $symlink_fallback_path = $fallback_dir;
+                break;
+            }
+        }
 
         // Only create parent directories if they don't exist
         // This prevents overriding directory metadata that was already restored
@@ -2131,13 +2490,13 @@ function checkout($snapshot_id, $rarfile, $outdir, $password = null) {
 }
 
 /**
- * Find manifest file for a specific snapshot ID
+ * Find manifest file for a specific commit ID
  * 
- * Searches the archive for manifest files matching the given snapshot ID
+ * Searches the archive for manifest files matching the given commit ID
  * and returns the most recent one if multiple exist with the same ID.
  * 
  * @param string $rarfile RAR archive file path
- * @param int $snapshot_id ID of the snapshot to find
+ * @param int $snapshot_id ID of the commit to find
  * @param string|null $password Password for archive access
  * @return array|null Manifest info or null if not found
  */
@@ -2187,14 +2546,14 @@ function find_manifest_for_snapshot($rarfile, $snapshot_id, $password = null) {
 }
 
 /**
- * Get the most recent manifest from the archive
+ * Get the most recent manifest from the repository
  * 
- * Finds the latest snapshot in the archive and extracts its manifest
- * content for comparison. Used to detect duplicate snapshots.
+ * Finds the latest commit in the repository and extracts its manifest
+ * content for comparison. 
  * 
- * @param string $rarfile RAR archive file path
- * @param string|null $password Password for archive access
- * @return array|null Manifest info and content or null if no snapshots exist
+ * @param string $rarfile RAR repository file path
+ * @param string|null $password Password for repository access
+ * @return array|null Manifest info and content or null if no commits exist
  */
 function get_last_manifest($rarfile, $password = null) {
     if (!file_exists($rarfile)) {
@@ -2279,15 +2638,15 @@ function get_last_manifest($rarfile, $password = null) {
 }
 
 /**
- * Compare two backup snapshots and show differences
+ * Compare two backup commits and show differences
  * 
- * Extracts manifests from two snapshots and compares them to show
+ * Extracts manifests from two commits and compares them to show
  * which files were added, removed, or changed between versions.
  * 
- * @param int $version1_id ID of the first snapshot
- * @param int $version2_id ID of the second snapshot
- * @param string $rarfile RAR archive file path
- * @param string|null $password Password for archive access
+ * @param int $version1_id ID of the first commit
+ * @param int $version2_id ID of the second commit
+ * @param string $rarfile RAR repository file path
+ * @param string|null $password Password for repository access
  * @return void
  */
 function diff_versions($version1_id, $version2_id, $rarfile, $password = null) {
@@ -2307,11 +2666,11 @@ function diff_versions($version1_id, $version2_id, $rarfile, $password = null) {
     }
 
     if (!$manifest1 || !$manifest2) {
-        echo "One or both snapshot IDs not found.\n";
+        echo "One or both commit IDs not found.\n";
         exit(1);
     }
 
-    echo "Comparing snapshot $version1_id: {$manifest1['name']} with snapshot $version2_id: {$manifest2['name']}...\n";
+    echo "Comparing commit $version1_id: {$manifest1['name']} with commit $version2_id: {$manifest2['name']}...\n";
 
     $temp = sys_get_temp_dir() . '/rarrepo_diff_' . uniqid(mt_rand(), true);
 
@@ -2373,16 +2732,16 @@ function diff_versions($version1_id, $version2_id, $rarfile, $password = null) {
     exec('rm -rf ' . escapeshellarg($temp));
 
     // Display results
-    echo "\nFile differences between snapshots:\n";
+    echo "\nFile differences between commits:\n";
     echo "========================================\n";
 
     if (empty($added) && empty($removed) && empty($changed)) {
-        echo "No differences found between snapshots.\n";
+        echo "No differences found between commits.\n";
         return;
     }
 
     if (!empty($added)) {
-        echo "\nADDED files in snapshot $version2_id:\n";
+        echo "\nADDED files in commit $version2_id:\n";
         echo "----------------------------------------\n";
 
         foreach ($added as $path => $hash) {
@@ -2391,7 +2750,7 @@ function diff_versions($version1_id, $version2_id, $rarfile, $password = null) {
     }
 
     if (!empty($removed)) {
-        echo "\nREMOVED files from snapshot $version1_id:\n";
+        echo "\nREMOVED files from commit $version1_id:\n";
         echo "----------------------------------------\n";
 
         foreach ($removed as $path => $hash) {
@@ -2443,19 +2802,19 @@ function parse_manifest($manifest_path) {
  * Attempt to repair a damaged RAR archive
  * 
  * Uses RAR's built-in repair command to attempt recovery of a
- * damaged archive. Leverages recovery records for better repair success.
+ * damaged repository. Leverages recovery records for better repair success.
  * 
- * @param string $rarfile RAR archive file path
- * @param string|null $password Password for archive access
+ * @param string $rarfile RAR repository file path
+ * @param string|null $password Password for repository access
  * @return void
  */
 function repair($rarfile, $password = null) {
     if (!file_exists($rarfile)) {
-        echo "Repository archive not found.\n";
+        echo "Repository repository not found.\n";
         exit(1);
     }
 
-    echo "Attempting to repair archive: $rarfile...\n";
+    echo "Attempting to repair repository: $rarfile...\n";
 
     // Use RAR's built-in repair command
     $rar_cmd = 'rar r';
@@ -2508,8 +2867,13 @@ function get_file_md5($filepath, $sudo_password = null) {
         $command = "md5sum $escaped_filepath | cut -d' ' -f1";
         
         $output = [];
-        exec("timeout 600 printf '%s\n' " . escapeshellarg($sudo_password) . " | sudo -p '' -S $command 2>/dev/null", $output, $code);
-        if ($code === 0 && !empty($output[0])) {
+        exec("timeout " . MD5_TIMEOUT . " printf '%s\n' " . escapeshellarg($sudo_password) . " | sudo -p '' -S $command 2>/dev/null", $output, $code);
+        
+        if ($code === 124) {
+            // Command timed out
+            print_error("⚠️  MD5 calculation timed out for: $filepath");
+            return false;
+        } elseif ($code === 0 && !empty($output[0])) {
             return trim($output[0]);
         }
     }
@@ -3085,6 +3449,29 @@ function print_table_row($columns, $widths, $separator = '  ') {
         $row .= str_pad($column, $width) . $separator;
     }
     echo $row . "\n";
+}
+
+/**
+ * Format manifest information for display
+ * 
+ * Converts manifest timestamp to readable format: "Commit ID mm/dd/yyyy hh:ii:ss AM/PM"
+ * 
+ * @param array $manifest Manifest array with 'id' and 'ts' keys
+ * @return string Formatted commit information
+ */
+function format_commit_display($manifest) {
+    if (!isset($manifest['id']) || !isset($manifest['ts'])) {
+        return "Unknown Commit";
+    }
+    
+    // Parse the timestamp (format: YYYY-MM-DD HH:MM:SS)
+    $timestamp = strtotime($manifest['ts']);
+    if ($timestamp === false) {
+        return "Commit {$manifest['id']} ({$manifest['ts']})";
+    }
+    
+    // Format as mm/dd/yyyy hh:ii:ss AM/PM
+    return "Commit " . $manifest['id'] . " " . date('m/d/Y h:i:s A', $timestamp);
 }
 
 /**
