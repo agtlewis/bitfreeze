@@ -256,10 +256,9 @@ class CommandManager {
         
         // Create commit timestamp
         $timestamp = time();
-        $date_str = date('Y-m-d H:i:s', $timestamp);
         
-        // Create commit filename
-        $commit_filename = "{$next_id}-{$date_str}.txt";
+        // Create commit filename using consistent helper method
+        $commit_filename = $this->createManifestFilename($next_id, $timestamp);
         $commit_path = "$tmp_versions/$commit_filename";
         
         // Write manifest to commit file
@@ -1714,14 +1713,14 @@ class CommandManager {
         $commit_id = $archive_manager->getNextCommitId($rarfile);
         $timestamp = time();
         $manifest_content = implode("\n", $manifest);
-        $manifest_filename = "$commit_id-" . date('Y-m-d', $timestamp) . ".txt";
+        $manifest_filename = $this->createManifestFilename($commit_id, $timestamp);
         
         $fs_manager->writeFileContents("$tmp_versions/$manifest_filename", $manifest_content);
         
         // Create images metadata if we have any images
         $has_images = false;
         if (!empty($images_info)) {
-            $images_json_filename = "$commit_id-" . date('Y-m-d', $timestamp) . ".images.json";
+            $images_json_filename = $this->createImagesFilename($commit_id, $timestamp);
             $images_json_path = "$tmp_versions/$images_json_filename";
             
             if ($fs_manager->createImagesMetadata($images_info, $images_json_path)) {
@@ -1834,6 +1833,28 @@ class CommandManager {
 
         // Clean up
         $system_manager->cleanupTempDir($temp);
+    }
+    
+    /**
+     * Create consistent manifest filename
+     * 
+     * @param int $commit_id Commit ID
+     * @param int $timestamp Unix timestamp
+     * @return string Manifest filename
+     */
+    private function createManifestFilename(int $commit_id, int $timestamp): string {
+        return "$commit_id-" . date('Y-m-d H:i:s', $timestamp) . ".txt";
+    }
+    
+    /**
+     * Create consistent images metadata filename
+     * 
+     * @param int $commit_id Commit ID
+     * @param int $timestamp Unix timestamp
+     * @return string Images metadata filename
+     */
+    private function createImagesFilename(int $commit_id, int $timestamp): string {
+        return "$commit_id-" . date('Y-m-d H:i:s', $timestamp) . ".images.json";
     }
     
     /**
