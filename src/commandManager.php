@@ -109,7 +109,7 @@ class CommandManager {
 
         $processed_count = 0;
 
-        foreach ($fs_manager->scanDirGenerator($folder) as $filepath) {
+        foreach ($fs_manager->scanDirGenerator($folder, [], null, [], $follow_symlinks) as $filepath) {
             $file       = new SplFileInfo($filepath);
             $fullpath   = $file->getPathname();
             $rel        = ltrim(substr($fullpath, strlen($folder)), '/');
@@ -469,7 +469,7 @@ class CommandManager {
         $current_files = [];
         $current_dirs = [];
         
-        foreach ($fs_manager->scanDirGenerator($folder) as $filepath) {
+        foreach ($fs_manager->scanDirGenerator($folder, [], null, [], false) as $filepath) {
             $file = new SplFileInfo($filepath);
             $fullpath = $file->getPathname();
             $rel = ltrim(substr($filepath, strlen($folder)), '/');
@@ -1409,7 +1409,7 @@ class CommandManager {
 
         debug_echo("\r\033[K" . "⚠️  DEBUG: Starting file scan for: $folder\n");
 
-        foreach ($fs_manager->scanDirGenerator($folder, $exclude_patterns, null, $selected_partitions) as $filepath) {
+        foreach ($fs_manager->scanDirGenerator($folder, $exclude_patterns, null, $selected_partitions, $follow_symlinks) as $filepath) {
             $generator_debug_count++;
             
             // Debug: Show what files we're getting from the generator

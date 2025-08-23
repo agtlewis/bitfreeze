@@ -612,7 +612,7 @@ class FileSystemManager {
      * @param array $selected_partitions List of selected partitions for backup (for boundary validation)
      * @return Generator<string> Yields file paths
      */
-    public function scanDirGenerator(string $dir, array $exclude_patterns = [], ?int $start_device_id = null, array $selected_partitions = []): Generator {
+    public function scanDirGenerator(string $dir, array $exclude_patterns = [], ?int $start_device_id = null, array $selected_partitions = [], bool $follow_symlinks = false): Generator {
         static $processed_dirs = [];
         static $file_count = 0;
         static $depth_tracker = [];
@@ -703,6 +703,20 @@ class FileSystemManager {
                     // Set depth for subdirectory
                     $subdir_path = $file->getPathname();
                     
+                    // CRITICAL: Check if this directory is actually a symlink
+                    if ($file->isLink()) {
+                        // This is a symlinked directory - yield it as a file, don't traverse into it
+                        // unless --follow-symlinks is enabled
+                        if (!$follow_symlinks) {
+                            debug_echo("\r\033[K" . "🔗 DEBUG: Yielding symlinked directory (not traversing): $subdir_path\n");
+                            $file_count++;
+                            yield $subdir_path; // Yield the symlink itself as a file
+                            continue; // Don't traverse into the symlinked directory
+                        } else {
+                            debug_echo("\r\033[K" . "🔗 DEBUG: Following symlinked directory: $subdir_path\n");
+                        }
+                    }
+                    
                     // Fast partition check using pre-computed device ID cache
                     if ($this->shouldSkipUnselectedPartitionFast($subdir_path, $approved_device_ids, $device_to_mount_cache)) {
                         debug_echo("\r\033[K" . "🚫 DEBUG: Skipping unselected partition: $subdir_path\n");
@@ -712,7 +726,7 @@ class FileSystemManager {
                     $depth_tracker[$subdir_path] = $current_depth + 1;
                     
                     // Recursively scan subdirectories, passing all parameters
-                    yield from $this->scanDirGenerator($subdir_path, $exclude_patterns, $start_device_id, $selected_partitions);
+                    yield from $this->scanDirGenerator($subdir_path, $exclude_patterns, $start_device_id, $selected_partitions, $follow_symlinks);
                 } else {
                     // Skip hidden files in home directories
                     $file_relative_path = $this->getRelativePath($file->getPathname());
@@ -981,7 +995,7 @@ class FileSystemManager {
      * @param array $selected_partitions List of selected partitions for backup (for boundary validation)
      * @return Generator<string> Yields directory paths
      */
-    public function scanDirGeneratorForDirs(string $dir, array $exclude_patterns = [], ?int $start_device_id = null, array $selected_partitions = []): Generator {
+    public function scanDirGeneratorForDirs(string $dir, array $exclude_patterns = [], ?int $start_device_id = null, array $selected_partitions = [], bool $follow_symlinks = false): Generator {
         static $processed_dirs = [];
         static $depth_tracker = [];
         static $approved_device_ids = [];
@@ -1040,6 +1054,19 @@ class FileSystemManager {
                     // Set depth for subdirectory
                     $subdir_path = $file->getPathname();
                     
+                    // CRITICAL: Check if this directory is actually a symlink
+                    if ($file->isLink()) {
+                        // This is a symlinked directory - yield it but don't traverse into it
+                        // unless --follow-symlinks is enabled
+                        if (!$follow_symlinks) {
+                            debug_echo("\r\033[K" . "🔗 DEBUG: Yielding symlinked directory (not traversing): $subdir_path\n");
+                            yield $file->getPathname(); // Yield the symlink directory itself
+                            continue; // Don't traverse into the symlinked directory
+                        } else {
+                            debug_echo("\r\033[K" . "🔗 DEBUG: Following symlinked directory: $subdir_path\n");
+                        }
+                    }
+                    
                     // Fast partition check using pre-computed device ID cache
                     if ($this->shouldSkipUnselectedPartitionFast($subdir_path, $approved_device_ids, $device_to_mount_cache)) {
                         debug_echo("\r\033[K" . "🚫 DEBUG: Skipping unselected partition (dirs): $subdir_path\n");
@@ -1049,7 +1076,7 @@ class FileSystemManager {
                     $depth_tracker[$subdir_path] = $current_depth + 1;
                     
                     yield $file->getPathname();
-                    yield from $this->scanDirGeneratorForDirs($subdir_path, $exclude_patterns, $start_device_id, $selected_partitions);
+                    yield from $this->scanDirGeneratorForDirs($subdir_path, $exclude_patterns, $start_device_id, $selected_partitions, $follow_symlinks);
                 }
             }
         } catch (UnexpectedValueException $e) {
