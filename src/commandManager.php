@@ -1409,7 +1409,7 @@ class CommandManager {
 
         debug_echo("\r\033[K" . "⚠️  DEBUG: Starting file scan for: $folder\n");
 
-        foreach ($fs_manager->scanDirGenerator($folder, $exclude_patterns) as $filepath) {
+        foreach ($fs_manager->scanDirGenerator($folder, $exclude_patterns, null, $selected_partitions) as $filepath) {
             $generator_debug_count++;
             
             // Debug: Show what files we're getting from the generator

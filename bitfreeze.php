@@ -212,14 +212,9 @@ if (basename(__FILE__) === basename($_SERVER['SCRIPT_NAME'] ?? '')) {
         
         $comment = count($cleaned) >= 4 ? $cleaned[3] : "Automated Commit";
         
-        // Extract password from -p flag if present
-        $password = null;
-        for ($i = 0; $i < count($cleaned); $i++) {
-            if ($cleaned[$i] === '-p' && isset($cleaned[$i + 1])) {
-                $password = $cleaned[$i + 1];
-                break;
-            }
-        }
+        // Use proper password detection - repository may already exist and be encrypted
+        $password_manager = new PasswordManager();
+        $password = $password_manager->getPasswordWithDetection($archive);
         
         $command_manager = new CommandManager();
         $command_manager->commit($folder, $archive, $comment, $password);
@@ -244,14 +239,9 @@ if (basename(__FILE__) === basename($_SERVER['SCRIPT_NAME'] ?? '')) {
         
         $comment = count($cleaned) >= 3 ? $cleaned[2] : "System Backup";
         
-        // Extract password from -p flag if present
-        $password = null;
-        for ($i = 0; $i < count($cleaned); $i++) {
-            if ($cleaned[$i] === '-p' && isset($cleaned[$i + 1])) {
-                $password = $cleaned[$i + 1];
-                break;
-            }
-        }
+        // Use proper password detection - repository may already exist and be encrypted
+        $password_manager = new PasswordManager();
+        $password = $password_manager->getPasswordWithDetection($archive);
         
         $command_manager = new CommandManager();
         $command_manager->systemBackup($archive, $comment, $password);
@@ -272,14 +262,9 @@ if (basename(__FILE__) === basename($_SERVER['SCRIPT_NAME'] ?? '')) {
             exit(1);
         }
         
-        // Extract password from -p flag if present
-        $password = null;
-        for ($i = 0; $i < count($cleaned); $i++) {
-            if ($cleaned[$i] === '-p' && isset($cleaned[$i + 1])) {
-                $password = $cleaned[$i + 1];
-                break;
-            }
-        }
+        // Use proper password detection with automatic prompting for encrypted archives
+        $password_manager = new PasswordManager();
+        $password = $password_manager->getPasswordWithDetection($archive);
         
         $archive_manager = new ArchiveManager($password);
         $versions = $archive_manager->listVersions($archive);
@@ -321,14 +306,9 @@ if (basename(__FILE__) === basename($_SERVER['SCRIPT_NAME'] ?? '')) {
             exit(1);
         }
         
-        // Extract password from -p flag if present
-        $password = null;
-        for ($i = 0; $i < count($cleaned); $i++) {
-            if ($cleaned[$i] === '-p' && isset($cleaned[$i + 1])) {
-                $password = $cleaned[$i + 1];
-                break;
-            }
-        }
+        // Use proper password detection with automatic prompting for encrypted archives
+        $password_manager = new PasswordManager();
+        $password = $password_manager->getPasswordWithDetection($repository);
         
         $command_manager = new CommandManager();
         $command_manager->checkout($commit_id, $repository, $outdir, $password);
@@ -379,14 +359,9 @@ if (basename(__FILE__) === basename($_SERVER['SCRIPT_NAME'] ?? '')) {
             exit(1);
         }
         
-        // Extract password from -p flag if present
-        $password = null;
-        for ($i = 0; $i < count($cleaned); $i++) {
-            if ($cleaned[$i] === '-p' && isset($cleaned[$i + 1])) {
-                $password = $cleaned[$i + 1];
-                break;
-            }
-        }
+        // Use proper password detection with automatic prompting for encrypted archives
+        $password_manager = new PasswordManager();
+        $password = $password_manager->getPasswordWithDetection($archive);
         
         $include_meta = $args->getFlag('--include-meta');
         $include_checksum = $args->getFlag('--checksum');
@@ -409,14 +384,9 @@ if (basename(__FILE__) === basename($_SERVER['SCRIPT_NAME'] ?? '')) {
             exit(1);
         }
         
-        // Extract password from -p flag if present
-        $password = null;
-        for ($i = 0; $i < count($cleaned); $i++) {
-            if ($cleaned[$i] === '-p' && isset($cleaned[$i + 1])) {
-                $password = $cleaned[$i + 1];
-                break;
-            }
-        }
+        // Use proper password detection with automatic prompting for encrypted archives
+        $password_manager = new PasswordManager();
+        $password = $password_manager->getPasswordWithDetection($archive);
         
         $command_manager = new CommandManager();
         $command_manager->repair($archive, $password);

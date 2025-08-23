@@ -608,18 +608,40 @@ class FileSystemManager {
      * 
      * @param string $dir Directory to scan
      * @param array $exclude_patterns List of directory names to exclude (e.g., ['proc', 'sys', 'tmp'])
+     * @param int|null $start_device_id Device ID of the starting partition (for boundary detection)
+     * @param array $selected_partitions List of selected partitions for backup (for boundary validation)
      * @return Generator<string> Yields file paths
      */
-    public function scanDirGenerator(string $dir, array $exclude_patterns = []): Generator {
+    public function scanDirGenerator(string $dir, array $exclude_patterns = [], ?int $start_device_id = null, array $selected_partitions = []): Generator {
         static $processed_dirs = [];
         static $file_count = 0;
         static $depth_tracker = [];
+        static $approved_device_ids = [];
+        static $device_to_mount_cache = [];
+        static $circular_ref_context = [];
         
         // Reset static variables if this is a new root directory scan
         if ($dir === '/' || $dir === '\\') {
             $processed_dirs = [];
             $file_count = 0;
             $depth_tracker = [];
+            $approved_device_ids = [];
+            $device_to_mount_cache = [];
+            $circular_ref_context = [];
+        }
+        
+        // Get device ID of the starting directory for partition boundary detection
+        if ($start_device_id === null) {
+            $start_stat = @stat($dir);
+            $start_device_id = $start_stat ? $start_stat['dev'] : null;
+            if ($start_device_id === null) {
+                debug_echo("\r\033[K" . "⚠️  DEBUG: Cannot determine device ID for: $dir\n");
+                return;
+            }
+            debug_echo("\r\033[K" . "🔍 DEBUG: Starting partition scan with device ID: $start_device_id for: $dir\n");
+            
+            // Pre-compute approved device IDs for O(1) lookups
+            $this->buildApprovedDeviceCache($selected_partitions, $approved_device_ids, $device_to_mount_cache);
         }
         
         // Get relative path for exclusion checking
@@ -663,8 +685,8 @@ class FileSystemManager {
             return;
         }
         
-        // Check for circular references by looking for repeated path segments
-        if ($this->hasCircularReference($real_path)) {
+        // Check for circular references using hybrid approach (fast + accurate)
+        if ($this->hasCircularReference($real_path, $circular_ref_context)) {
             debug_echo("\r\033[K" . "⚠️  DEBUG: Skipping circular reference path: $real_path\n");
             return;
         }
@@ -680,10 +702,17 @@ class FileSystemManager {
                 if ($file->isDir()) {
                     // Set depth for subdirectory
                     $subdir_path = $file->getPathname();
+                    
+                    // Fast partition check using pre-computed device ID cache
+                    if ($this->shouldSkipUnselectedPartitionFast($subdir_path, $approved_device_ids, $device_to_mount_cache)) {
+                        debug_echo("\r\033[K" . "🚫 DEBUG: Skipping unselected partition: $subdir_path\n");
+                        continue; // Skip this subdirectory - it's on an unselected partition
+                    }
+                    
                     $depth_tracker[$subdir_path] = $current_depth + 1;
                     
-                    // Recursively scan subdirectories, passing the exclusion patterns
-                    yield from $this->scanDirGenerator($subdir_path, $exclude_patterns);
+                    // Recursively scan subdirectories, passing all parameters
+                    yield from $this->scanDirGenerator($subdir_path, $exclude_patterns, $start_device_id, $selected_partitions);
                 } else {
                     // Skip hidden files in home directories
                     $file_relative_path = $this->getRelativePath($file->getPathname());
@@ -733,6 +762,20 @@ class FileSystemManager {
             }
             // Otherwise, skip this directory silently
             debug_echo("\r\033[K" . "❌ DEBUG: Permission denied and no sudo fallback for: $dir\n");
+        }
+        
+        // Show circular reference detection statistics when scan completes
+        if ($dir === '/' && !empty($circular_ref_context['stats'])) {
+            $stats = $circular_ref_context['stats'];
+            $total_checks = $stats['fast_checks'] + $stats['slow_checks'];
+            if ($total_checks > 0) {
+                debug_echo("\r\033[K" . "📊 DEBUG: Circular reference detection stats:\n");
+                debug_echo("  Fast checks: " . number_format($stats['fast_checks']) . " (" . 
+                          number_format($stats['fast_checks'] / $total_checks * 100, 1) . "%)\n");
+                debug_echo("  Slow checks: " . number_format($stats['slow_checks']) . " (" . 
+                          number_format($stats['slow_checks'] / $total_checks * 100, 1) . "%)\n");
+                debug_echo("  Circular references found: " . number_format($stats['circular_found']) . "\n");
+            }
         }
     }
     
@@ -865,31 +908,68 @@ class FileSystemManager {
     }
     
     /**
-     * Check if a path has circular references by looking for repeated segments
+     * Check if a path has circular references using hybrid approach (fast + accurate)
+     * 
+     * Uses fast heuristic checks for 99% of normal paths, and accurate inode-based
+     * detection only for suspicious paths. This prevents false positives while
+     * maintaining excellent performance in tight loops.
      * 
      * @param string $real_path Full real path to check
-     * @return bool True if circular reference detected
+     * @param array &$context Context array for tracking across recursive calls
+     * @return bool True if genuine circular reference detected
      */
-    private function hasCircularReference(string $real_path): bool {
-        // Split path into segments
-        $segments = explode('/', trim($real_path, '/'));
-        
-        // Check for repeated segments (circular reference)
-        $seen = [];
-        foreach ($segments as $segment) {
-            if (isset($seen[$segment])) {
-                // Found repeated segment, likely a circular reference
-                return true;
-            }
-            $seen[$segment] = true;
+    private function hasCircularReference(string $real_path, array &$context = []): bool {
+        // Initialize context for tracking across recursive calls
+        if (empty($context)) {
+            $context = [
+                'visited_inodes' => [],
+                'stats' => ['fast_checks' => 0, 'slow_checks' => 0, 'circular_found' => 0]
+            ];
         }
         
-        // Check for extremely long paths (over 100 segments)
-        if (count($segments) > 100) {
-            return true;
+        // FAST PATH: Quick heuristic checks (covers 99% of cases)
+        $path_length = strlen($real_path);
+        $depth = substr_count($real_path, '/');
+        
+        // Most normal paths pass these quick checks without expensive operations
+        // Use realistic filesystem limits: Linux supports ~4096 char paths, ~1000+ depth
+        if ($path_length < 1000 && $depth < 100) {
+            $context['stats']['fast_checks']++;
+            return false; // Almost certainly not circular, skip expensive checks
         }
         
-        return false;
+        // SLOW PATH: Accurate inode-based detection for suspicious paths only
+        $context['stats']['slow_checks']++;
+        debug_echo("\r\033[K" . "🔍 DEBUG: Checking suspicious path for circular reference: $real_path\n");
+        
+        $stat = @stat($real_path);
+        if ($stat === false) {
+            // Can't stat the path, assume not circular (could be permission issue)
+            return false;
+        }
+        
+        // Use device:inode as unique filesystem identifier
+        // This is the only reliable way to detect true circular references
+        $device_id = $stat['dev'];
+        $inode_id = $stat['ino'];
+        
+        // Initialize device array if not exists
+        if (!isset($context['visited_inodes'][$device_id])) {
+            $context['visited_inodes'][$device_id] = [];
+        }
+        
+        // Check if we've seen this exact inode before
+        if (isset($context['visited_inodes'][$device_id][$inode_id])) {
+            $context['stats']['circular_found']++;
+            debug_echo("\r\033[K" . "🔄 DEBUG: TRUE circular reference detected (inode $device_id:$inode_id): $real_path\n");
+            debug_echo("     Previously seen at: {$context['visited_inodes'][$device_id][$inode_id]}\n");
+            return true; // Genuine circular reference found via inode tracking
+        }
+        
+        // Mark this inode as visited
+        $context['visited_inodes'][$device_id][$inode_id] = $real_path;
+        
+        return false; // No circular reference detected
     }
     
     /**
@@ -897,16 +977,35 @@ class FileSystemManager {
      * 
      * @param string $dir Directory to scan
      * @param array $exclude_patterns List of directory patterns to exclude
+     * @param int|null $start_device_id Device ID of the starting partition (for boundary detection)
+     * @param array $selected_partitions List of selected partitions for backup (for boundary validation)
      * @return Generator<string> Yields directory paths
      */
-    public function scanDirGeneratorForDirs(string $dir, array $exclude_patterns = []): Generator {
+    public function scanDirGeneratorForDirs(string $dir, array $exclude_patterns = [], ?int $start_device_id = null, array $selected_partitions = []): Generator {
         static $processed_dirs = [];
         static $depth_tracker = [];
+        static $approved_device_ids = [];
+        static $device_to_mount_cache = [];
         
         // Reset static variables if this is a new root directory scan
         if ($dir === '/' || $dir === '\\') {
             $processed_dirs = [];
             $depth_tracker = [];
+            $approved_device_ids = [];
+            $device_to_mount_cache = [];
+        }
+        
+        // Get device ID of the starting directory for partition boundary detection
+        if ($start_device_id === null) {
+            $start_stat = @stat($dir);
+            $start_device_id = $start_stat ? $start_stat['dev'] : null;
+            if ($start_device_id === null) {
+                debug_echo("\r\033[K" . "⚠️  DEBUG: Cannot determine device ID for: $dir\n");
+                return;
+            }
+            
+            // Pre-compute approved device IDs for O(1) lookups
+            $this->buildApprovedDeviceCache($selected_partitions, $approved_device_ids, $device_to_mount_cache);
         }
         
         // Prevent infinite recursion by tracking processed directories
@@ -940,10 +1039,17 @@ class FileSystemManager {
                 if ($file->isDir()) {
                     // Set depth for subdirectory
                     $subdir_path = $file->getPathname();
+                    
+                    // Fast partition check using pre-computed device ID cache
+                    if ($this->shouldSkipUnselectedPartitionFast($subdir_path, $approved_device_ids, $device_to_mount_cache)) {
+                        debug_echo("\r\033[K" . "🚫 DEBUG: Skipping unselected partition (dirs): $subdir_path\n");
+                        continue; // Skip this subdirectory - it's on an unselected partition
+                    }
+                    
                     $depth_tracker[$subdir_path] = $current_depth + 1;
                     
                     yield $file->getPathname();
-                    yield from $this->scanDirGeneratorForDirs($subdir_path, $exclude_patterns);
+                    yield from $this->scanDirGeneratorForDirs($subdir_path, $exclude_patterns, $start_device_id, $selected_partitions);
                 }
             }
         } catch (UnexpectedValueException $e) {
@@ -1294,6 +1400,193 @@ class FileSystemManager {
             $metadata['ctime'],
             $metadata['size']
         ]);
+    }
+    
+    /**
+     * Build cache of approved device IDs for fast O(1) partition lookups
+     * 
+     * @param array $selected_partitions Array of selected partition info
+     * @param array &$approved_device_ids Reference to cache array for approved device IDs
+     * @param array &$device_to_mount_cache Reference to cache for device ID to mount point mapping
+     */
+    private function buildApprovedDeviceCache(array $selected_partitions, array &$approved_device_ids, array &$device_to_mount_cache): void {
+        $approved_device_ids = [];
+        $device_to_mount_cache = [];
+        
+        foreach ($selected_partitions as $partition) {
+            $mount_point = $partition['mount_point'];
+            $stat = @stat($mount_point);
+            
+            if ($stat !== false) {
+                $device_id = $stat['dev'];
+                $approved_device_ids[$device_id] = true; // O(1) lookup
+                $device_to_mount_cache[$device_id] = $mount_point;
+                debug_echo("\r\033[K" . "✅ DEBUG: Approved device ID $device_id for mount point: $mount_point\n");
+            } else {
+                debug_echo("\r\033[K" . "⚠️  DEBUG: Cannot stat selected partition: $mount_point\n");
+            }
+        }
+        
+        debug_echo("\r\033[K" . "🚀 DEBUG: Built fast lookup cache with " . count($approved_device_ids) . " approved device IDs\n");
+    }
+    
+    /**
+     * Fast check if a path is on an unselected partition using pre-computed device ID cache
+     * 
+     * @param string $path Path to check
+     * @param array $approved_device_ids Pre-computed cache of approved device IDs
+     * @param array $device_to_mount_cache Cache mapping device IDs to mount points
+     * @return bool True if path should be skipped (unselected partition), false if should proceed
+     */
+    private function shouldSkipUnselectedPartitionFast(string $path, array $approved_device_ids, array $device_to_mount_cache): bool {
+        $stat = @stat($path);
+        $device_id = null;
+        
+        if ($stat === false) {
+            // If we can't stat the path, try with sudo (but this should be rare)
+            if ($this->sudo_password !== null && $this->can_elevate) {
+                $escaped_path = escapeshellarg($path);
+                $command = "stat -c '%d' $escaped_path";
+                $output = [];
+                exec("printf '%s\n' " . escapeshellarg($this->sudo_password) . " | sudo -p '' -S $command 2>/dev/null", $output, $code);
+                if ($code === 0 && !empty($output[0])) {
+                    $device_id = (int)trim($output[0]);
+                }
+            }
+            
+            if ($device_id === null) {
+                // If we can't determine device ID, assume unselected partition for safety
+                return true;
+            }
+        } else {
+            $device_id = $stat['dev'];
+        }
+        
+        // O(1) lookup in approved device IDs cache
+        if (isset($approved_device_ids[$device_id])) {
+            // This device is approved, allow it
+            return false;
+        }
+        
+        // This device is not approved, skip it
+        $mount_point = $device_to_mount_cache[$device_id] ?? 'unknown';
+        debug_echo("\r\033[K" . "🚫 DEBUG: Skipping unapproved device $device_id (mount: $mount_point) for path: $path\n");
+        return true;
+    }
+    
+    /**
+     * Check if a path is on an unselected partition and should be skipped
+     * 
+     * @param string $path Path to check
+     * @param int $reference_device_id Reference device ID of the starting partition
+     * @param array $selected_partitions Array of selected partition info
+     * @return bool True if path should be skipped (unselected partition), false if should proceed
+     */
+    private function shouldSkipUnselectedPartition(string $path, int $reference_device_id, array $selected_partitions): bool {
+        $stat = @stat($path);
+        $device_id = null;
+        
+        if ($stat === false) {
+            // If we can't stat the path, try with sudo
+            if ($this->sudo_password !== null && $this->can_elevate) {
+                $escaped_path = escapeshellarg($path);
+                $command = "stat -c '%d' $escaped_path"; // %d gives device ID in decimal
+                $output = [];
+                exec("printf '%s\n' " . escapeshellarg($this->sudo_password) . " | sudo -p '' -S $command 2>/dev/null", $output, $code);
+                if ($code === 0 && !empty($output[0])) {
+                    $device_id = (int)trim($output[0]);
+                }
+            }
+            
+            if ($device_id === null) {
+                // If we can't determine device ID, assume unselected partition for safety
+                debug_echo("\r\033[K" . "⚠️  DEBUG: Cannot determine device ID for: $path (assuming unselected partition)\n");
+                return true;
+            }
+        } else {
+            $device_id = $stat['dev'];
+        }
+        
+        // If it's the same device as the starting partition, allow it
+        if ($device_id === $reference_device_id) {
+            return false;
+        }
+        
+        // Check if this device ID matches any of the selected partitions
+        $mount_point = $this->getPartitionMountPointForPath($path);
+        foreach ($selected_partitions as $partition) {
+            if ($partition['mount_point'] === $mount_point) {
+                debug_echo("\r\033[K" . "✅ DEBUG: Allowing selected partition: $path (mount: $mount_point)\n");
+                return false; // This partition is selected, don't skip
+            }
+        }
+        
+        // This partition is not selected, skip it
+        $this->logPartitionBoundary($path, $device_id, $reference_device_id, $mount_point, false);
+        return true;
+    }
+    
+    /**
+     * Get the mount point for a given path
+     * 
+     * @param string $path Path to check
+     * @return string Mount point path
+     */
+    private function getPartitionMountPointForPath(string $path): string {
+        // Use df command to get mount point for the path
+        $escaped_path = escapeshellarg($path);
+        $output = [];
+        exec("df --output=target $escaped_path 2>/dev/null | tail -n 1", $output);
+        
+        if (!empty($output[0])) {
+            return trim($output[0]);
+        }
+        
+        // Fallback: try to determine mount point by walking up the directory tree
+        $current_path = realpath($path);
+        if ($current_path === false) {
+            return '/'; // Default fallback
+        }
+        
+        $path_stat = @stat($current_path);
+        if ($path_stat === false) {
+            return '/'; // Default fallback
+        }
+        
+        $current_device = $path_stat['dev'];
+        
+        // Walk up the directory tree until device changes
+        while ($current_path !== '/' && $current_path !== '') {
+            $parent_path = dirname($current_path);
+            $parent_stat = @stat($parent_path);
+            
+            if ($parent_stat && $parent_stat['dev'] !== $current_device) {
+                // Device changed, current_path is the mount point
+                return $current_path;
+            }
+            
+            $current_path = $parent_path;
+        }
+        
+        return '/'; // Root filesystem
+    }
+    
+    /**
+     * Log partition boundary detection for debugging
+     * 
+     * @param string $path Path being checked
+     * @param int $current_device Device ID of current path
+     * @param int $reference_device Reference device ID
+     * @param string $mount_point Mount point of the path
+     * @param bool $is_selected Whether this partition is selected for backup
+     */
+    private function logPartitionBoundary(string $path, int $current_device, int $reference_device, string $mount_point = '', bool $is_selected = false): void {
+        debug_echo("\r\033[K" . "🔍 DEBUG: Partition boundary detected:\n");
+        debug_echo("  Path: $path\n");
+        debug_echo("  Current device: $current_device\n");
+        debug_echo("  Reference device: $reference_device\n");
+        debug_echo("  Mount point: $mount_point\n");
+        debug_echo("  Selected for backup: " . ($is_selected ? 'Yes' : 'No') . "\n");
     }
 
 }
