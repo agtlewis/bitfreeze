@@ -33,7 +33,12 @@ class FileSystemManager {
             return false;
         }
         
-        // Test if user can run sudo (this will prompt for password if needed)
+        // If we have a password, assume sudo will work (we'll test it when needed)
+        if ($this->sudo_password !== null) {
+            return true;
+        }
+        
+        // Only test non-interactive sudo if no password is provided
         exec('sudo -n true 2>/dev/null', $output, $code);
         return $code === 0;
     }
@@ -772,10 +777,19 @@ class FileSystemManager {
                     // This was causing the infinite loop - we're already getting all files from find
                     debug_echo("\r\033[K" . "⚠️  DEBUG: Skipping recursive processing for sudo fallback directory: $dir\n");
                     return;
+                } else {
+                    debug_echo("\r\033[K" . "❌ DEBUG: Sudo command failed for: $dir (exit code: $return_code)\n");
+                }
+            } else {
+                // Provide specific reason why sudo fallback is not available
+                if ($this->sudo_password === null) {
+                    debug_echo("\r\033[K" . "❌ DEBUG: Permission denied, no sudo password available for: $dir\n");
+                } elseif (!$this->can_elevate) {
+                    debug_echo("\r\033[K" . "❌ DEBUG: Permission denied, sudo not available for: $dir\n");
+                } else {
+                    debug_echo("\r\033[K" . "❌ DEBUG: Permission denied, unknown sudo issue for: $dir\n");
                 }
             }
-            // Otherwise, skip this directory silently
-            debug_echo("\r\033[K" . "❌ DEBUG: Permission denied and no sudo fallback for: $dir\n");
         }
         
         // Show circular reference detection statistics when scan completes
@@ -840,18 +854,22 @@ class FileSystemManager {
         }
         
         // Quick checks for common patterns to avoid regex overhead
-        if (strpos($relative_path, 'proc/') === 0 || 
-            strpos($relative_path, 'sys/') === 0 || 
-            strpos($relative_path, 'tmp/') === 0 || 
-            strpos($relative_path, 'run/') === 0 || 
-            strpos($relative_path, 'dev/') === 0 ||
-            strpos($relative_path, 'var/cache/') === 0 ||
-            strpos($relative_path, 'var/tmp/') === 0 ||
-            strpos($relative_path, 'var/log/') === 0 ||
-            strpos($relative_path, 'var/run/') === 0 ||
-            strpos($relative_path, 'var/lock/') === 0 ||
-            strpos($relative_path, 'var/spool/') === 0) {
+        // Define excluded directories for fast lookup
+        static $excluded_dirs = [
+            'proc', 'sys', 'tmp', 'run', 'dev',
+            'var/cache', 'var/tmp', 'var/log', 'var/run', 'var/lock', 'var/spool'
+        ];
+        
+        // Check exact matches first (entire directories)
+        if (in_array($relative_path, $excluded_dirs, true)) {
             return true;
+        }
+        
+        // Check subdirectories for paths that were already excluded at parent level
+        foreach ($excluded_dirs as $excluded_dir) {
+            if (strpos($relative_path, $excluded_dir . '/') === 0) {
+                return true;
+            }
         }
         
         // Check for hidden home directories

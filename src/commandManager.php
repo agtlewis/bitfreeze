@@ -1367,18 +1367,18 @@ class CommandManager {
         
         // Build exclusion patterns based on selected partitions
         $exclude_patterns = [
-            'proc/*',           // All proc subdirectories (relative path)
-            'sys/*',            // All sys subdirectories (relative path)
-            'tmp/*',            // All tmp subdirectories (relative path)
-            'run/*',            // All run subdirectories (relative path)
-            'dev/*',            // All dev subdirectories (relative path)
-            'lost+found',       // Lost+found directory (relative path)
-            'var/cache/*',      // Cache directories
-            'var/tmp/*',        // Temporary files
-            'var/log/*',        // Log files
-            'var/run/*',        // Runtime files
-            'var/lock/*',       // Lock files
-            'var/spool/*',      // Spool directories
+            'proc',             // Entire proc directory (avoid iteration)
+            'sys',              // Entire sys directory (avoid iteration)
+            'tmp',              // Entire tmp directory (avoid iteration)
+            'run',              // Entire run directory (avoid iteration)
+            'dev',              // Entire dev directory (avoid iteration)
+            'lost+found',       // Lost+found directory
+            'var/cache',        // Entire cache directory (avoid iteration)
+            'var/tmp',          // Entire tmp directory (avoid iteration)
+            'var/log',          // Entire log directory (avoid iteration)
+            'var/run',          // Entire run directory (avoid iteration)
+            'var/lock',         // Entire lock directory (avoid iteration)
+            'var/spool',        // Entire spool directory (avoid iteration)
             'home/*/\.*',       // Hidden directories in home (e.g., .steam, .cache)
             'home/*/\.*/*',     // All contents of hidden home directories
             'root/\.*',         // Hidden directories in root home
