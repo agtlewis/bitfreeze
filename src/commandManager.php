@@ -92,7 +92,7 @@ class CommandManager {
         $file_count         = 0;
         $add_count          = 0;
         $already_count      = 0;
-        $skipped_count      = 0; // Track files skipped due to permission issues
+        $skipped_count      = 0; // Track files skipped during processing
         $skipped_files      = []; // Track which files were skipped
         $skipped_reasons    = []; // Track why files were skipped
         $parent_dirs        = [];
@@ -1290,7 +1290,7 @@ class CommandManager {
         $file_count         = 0;
         $add_count          = 0;
         $already_count      = 0;
-        $skipped_count      = 0; // Track files skipped due to permission issues
+        $skipped_count      = 0; // Track files skipped during processing
         $skipped_files      = []; // Track which files were skipped
         $skipped_reasons    = []; // Track why files were skipped
         $parent_dirs        = [];
@@ -1399,6 +1399,71 @@ class CommandManager {
         // Get maximum batch size based on available temp space
         $max_batch_size = $fs_manager->getMaxBatchSize();
         echo "📊 Batch processing: Using " . BATCH_SIZE_PERCENTAGE . "% of available temp space (" . $this->formatBytes($max_batch_size) . " per batch)\n";
+        
+        // Process partition images if any partitions need imaging
+        $images_info = [];
+        $partitions_to_image = array_filter($selected_partitions, function($p) { return $p['should_image']; });
+        
+        if (!empty($partitions_to_image)) {
+            $this->display->header("PARTITION IMAGING");
+            $this->display->info("🔧 Creating partition images for " . count($partitions_to_image) . " partition(s)...");
+            
+            // Create temporary images directory
+            $tmp_images = "$temp/images";
+            if (!is_dir($tmp_images)) {
+                mkdir($tmp_images, 0755, true);
+            }
+            
+            // Validate disk space for imaging
+            $validation = $fs_manager->validateImageDiskSpace($partitions_to_image, $temp, $max_batch_size);
+            
+            if (!$validation['valid']) {
+                $this->display->error("Imaging validation failed:");
+                foreach ($validation['errors'] as $error) {
+                    echo "  ❌ $error\n";
+                }
+                exit(1);
+            }
+            
+            if ($validation['exceeds_batch_size']) {
+                $this->display->warning("⚠️  Images will exceed max batch size (" . $this->formatBytes($validation['total_estimated']) . " > " . $this->formatBytes($max_batch_size) . ")");
+                echo "   Images will be processed in their own batch.\n";
+            }
+            
+            echo "💾 Estimated image space needed: " . $this->formatBytes($validation['total_estimated']) . "\n";
+            echo "💿 Available temp space: " . $this->formatBytes($validation['available_space']) . "\n";
+            
+            // Progress callback for imaging
+            $imaging_progress_callback = function($message, $percent) {
+                echo "\r\033[K" . $this->display->colorize("📸 $message (" . number_format($percent, 1) . "%)", DisplayManager::COLOR_CYAN);
+            };
+            
+            // Process the images
+            $imaging_result = $fs_manager->processPartitionImages($selected_partitions, $tmp_images, $imaging_progress_callback);
+            
+            if (!$imaging_result['success']) {
+                echo "\n";
+                $this->display->error("Imaging failed:");
+                foreach ($imaging_result['errors'] as $error) {
+                    echo "  ❌ $error\n";
+                }
+                exit(1);
+            }
+            
+            $images_info = $imaging_result['images_info'];
+            
+            echo "\n";
+            $this->display->success("✅ Successfully created " . count($images_info) . " partition image(s)");
+            
+            if (!empty($imaging_result['errors'])) {
+                $this->display->warning("⚠️  Some imaging operations had issues:");
+                foreach ($imaging_result['errors'] as $error) {
+                    echo "  ⚠️  $error\n";
+                }
+            }
+            
+            echo "\n";
+        }
         
         // Collect files for batch processing
         $file_batch         = [];
@@ -1652,6 +1717,20 @@ class CommandManager {
         $manifest_filename = "$commit_id-" . date('Y-m-d', $timestamp) . ".txt";
         
         $fs_manager->writeFileContents("$tmp_versions/$manifest_filename", $manifest_content);
+        
+        // Create images metadata if we have any images
+        $has_images = false;
+        if (!empty($images_info)) {
+            $images_json_filename = "$commit_id-" . date('Y-m-d', $timestamp) . ".images.json";
+            $images_json_path = "$tmp_versions/$images_json_filename";
+            
+            if ($fs_manager->createImagesMetadata($images_info, $images_json_path)) {
+                $has_images = true;
+                $this->display->success("✅ Created images metadata: $images_json_filename");
+            } else {
+                $this->display->error("❌ Failed to create images metadata file");
+            }
+        }
 
         // Now we need to actually create the RAR repository with all the files
         echo "\n";
@@ -1669,24 +1748,30 @@ class CommandManager {
         if ($kernel_count > 0) {
             $total_items_to_add += $kernel_count;
         }
+        if ($has_images) {
+            $total_items_to_add += 1; // images.json file
+            $total_items_to_add += count($images_info); // image files
+        }
         
         // Build the RAR command to add all items at once
-        $rar_cmd = "rar a " . escapeshellarg($rarfile) . " versions/$manifest_filename";
+        $items_to_add = ["versions/$manifest_filename"];
+        
         if ($system_meta_count > 0) {
-            $rar_cmd .= " system_meta";
+            $items_to_add[] = "system_meta";
         }
         if ($kernel_count > 0) {
-            $rar_cmd .= " kernels";
+            $items_to_add[] = "kernels";
+        }
+        if ($has_images) {
+            $items_to_add[] = "versions/$images_json_filename";
+            $items_to_add[] = "images";
         }
         
+        // Build RAR command with password if needed
         if ($password !== null) {
-            $rar_cmd = "rar a -hp" . escapeshellarg($password) . " " . escapeshellarg($rarfile) . " versions/$manifest_filename";
-            if ($system_meta_count > 0) {
-                $rar_cmd .= " system_meta";
-            }
-            if ($kernel_count > 0) {
-                $rar_cmd .= " kernels";
-            }
+            $rar_cmd = "rar a -hp" . escapeshellarg($password) . " " . escapeshellarg($rarfile) . " " . implode(" ", $items_to_add);
+        } else {
+            $rar_cmd = "rar a " . escapeshellarg($rarfile) . " " . implode(" ", $items_to_add);
         }
         
         if ($low_priority) {
@@ -1722,6 +1807,10 @@ class CommandManager {
         echo "  🔗 Symbolic links: " . number_format($symlink_count) . "\n";
         echo "  🐧 Kernel files: " . number_format($kernel_count) . "\n";
         echo "  📋 System metadata: " . number_format($system_meta_count) . "\n";
+        if (!empty($images_info)) {
+            $total_image_size = array_sum(array_column($images_info, 'image_size'));
+            echo "  📸 Partition images: " . number_format(count($images_info)) . " (" . $this->formatBytes($total_image_size) . ")\n";
+        }
         echo "  ⏭️  Skipped files: " . number_format($skipped_count) . "\n";
         echo "  💾 Total size processed: " . $this->formatBytes($total_size) . "\n";
         echo "  📦 Archive size change: " . $this->formatBytes($size_difference) . "\n";
@@ -1730,9 +1819,10 @@ class CommandManager {
         echo "  💬 Comment: $comment\n\n";
         
         if (!empty($skipped_files)) {
-            $this->display->warning("⚠️  Some files were skipped due to permission issues:");
+            $this->display->warning("⚠️  Some files were skipped:");
             foreach (array_slice($skipped_files, 0, 10) as $skipped) {
-                echo "    - $skipped\n";
+                $reason = $skipped_reasons[$skipped] ?? "Unknown reason";
+                echo "    - $skipped ($reason)\n";
             }
             if (count($skipped_files) > 10) {
                 echo "    ... and " . (count($skipped_files) - 10) . " more\n";
