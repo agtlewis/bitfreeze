@@ -336,14 +336,40 @@ class CommandManager {
         // Add comment to commit file
         $fs_manager->writeFileContents($commit_path, "\n\n# " . $comment . "\n", FILE_APPEND);
 
+        // For new archives (first commit), include bitfreeze.php script and README.txt for self-contained archives
+        $include_script_and_readme = ($next_id === 1);
+        if ($include_script_and_readme) {
+            // Place a copy of the current script at archive root for self-contained archives
+            copy(__FILE__, "$temp/bitfreeze.php");
+            
+            // Generate README.txt at archive root
+            file_put_contents("$temp/README.txt", README_TEXT);
+        }
+
         // Create RAR command - change to temp directory to avoid full path in archive
         $current_dir = getcwd();
         chdir($temp);
         
-        $rar_cmd = $this->generateRarArchiveCommand($rarfile, escapeshellarg("versions/$commit_filename"), $password, $args->getFlag('--low-priority'));
+        // Build list of items to add to archive
+        $items_to_add = ["versions/$commit_filename"];
+        $item_count = 1;
+        
+        // Add script and README for new archives
+        if ($include_script_and_readme) {
+            if (file_exists("bitfreeze.php")) {
+                $items_to_add[] = "bitfreeze.php";
+                $item_count++;
+            }
+            if (file_exists("README.txt")) {
+                $items_to_add[] = "README.txt";
+                $item_count++;
+            }
+        }
+        
+        $rar_cmd = $this->generateRarArchiveCommand($rarfile, implode(" ", array_map('escapeshellarg', $items_to_add)), $password, $args->getFlag('--low-priority'));
 
         // Execute RAR command with progress
-        $this->progress_manager->executeRarWithProgress($rar_cmd, 1); // Single commit file
+        $this->progress_manager->executeRarWithProgress($rar_cmd, $item_count);
         
         // Change back to original directory
         chdir($current_dir);
@@ -1795,6 +1821,16 @@ class CommandManager {
         }
         
         $this->display->success("✅ Created manifest file: $manifest_filename");
+
+        // For new archives (first commit), include bitfreeze.php script and README.txt for self-contained archives
+        $include_script_and_readme = ($commit_id === 1);
+        if ($include_script_and_readme) {
+            // Place a copy of the current script at archive root for self-contained archives
+            copy(__FILE__, "$temp/bitfreeze.php");
+            
+            // Generate README.txt at archive root
+            file_put_contents("$temp/README.txt", README_TEXT);
+        }
         
         // Create images metadata if we have any images
         $has_images = false;
@@ -1833,6 +1869,18 @@ class CommandManager {
         
         // Build the RAR command to add all items at once
         $items_to_add = ["versions/$manifest_filename"];
+        
+        // Add script and README for new archives
+        if ($include_script_and_readme) {
+            if (file_exists("bitfreeze.php")) {
+                $items_to_add[] = "bitfreeze.php";
+                $total_items_to_add++;
+            }
+            if (file_exists("README.txt")) {
+                $items_to_add[] = "README.txt";
+                $total_items_to_add++;
+            }
+        }
         
         if ($system_meta_count > 0) {
             $items_to_add[] = "system_meta";
@@ -6124,6 +6172,49 @@ class ArchiveManager {
     }
     
     /**
+     * Get comment from manifest file
+     * 
+     * @param string $rarfile Path to RAR archive
+     * @param string $manifest_name Manifest file name
+     * @return string Comment text or "No comment"
+     */
+    public function getCommentFromManifest(string $rarfile, string $manifest_name): string {
+        $temp = sys_get_temp_dir() . '/rarrepo_comment_' . uniqid(mt_rand(), true);
+        mkdir($temp, 0700, true);
+        
+        // Extract the manifest file
+        $rar_cmd = 'rar e -inul';
+        if ($this->password) {
+            $rar_cmd .= ' -hp' . escapeshellarg($this->password);
+        }
+        $rar_cmd .= ' ' . escapeshellarg($rarfile) . ' ' . escapeshellarg($manifest_name) . ' ' . escapeshellarg($temp);
+        
+        exec($rar_cmd, $output, $code);
+        
+        if ($code !== 0) {
+            exec('rm -rf ' . escapeshellarg($temp));
+            return "No comment";
+        }
+        
+        $manifest_path = "$temp/" . basename($manifest_name);
+        if (!file_exists($manifest_path)) {
+            exec('rm -rf ' . escapeshellarg($temp));
+            return "No comment";
+        }
+        
+        // Read the manifest file and extract comment
+        $content = file_get_contents($manifest_path);
+        exec('rm -rf ' . escapeshellarg($temp));
+        
+        // Look for comment in the format "# comment text"
+        if (preg_match('/^# (.+)$/m', $content, $matches)) {
+            return trim($matches[1]);
+        }
+        
+        return "No comment";
+    }
+    
+    /**
      * Get last manifest from archive
      * 
      * @param string $rarfile Path to RAR archive
@@ -6642,16 +6733,19 @@ if (basename(__FILE__) === basename($_SERVER['SCRIPT_NAME'] ?? '')) {
         $versions = $archive_manager->listVersions($archive);
         
         if (empty($versions)) {
-            echo "No commits found in repository.\n";
+            echo "No commits found.\n";
             return;
         }
         
-        $display = new DisplayManager();
-        $display->header("COMMITS");
+        // Use reference.php format for list display
+        echo "Available Commits (most recent first):\n";
+        echo "ID    Date/Time           Comment\n";
+        echo "----------------------------------------\n";
         
-        foreach ($versions as $version) {
-            $commit_display = $display->formatCommitDisplay($version);
-            echo "Commit {$commit_display}\n";
+        foreach ($versions as $v) {
+            $comment = $archive_manager->getCommentFromManifest($archive, $v['name']);
+            $comment_display = strlen($comment) > 40 ? substr($comment, 0, 37) . '...' : $comment;
+            echo str_pad($v['id'], 4) . "  " . str_pad($v['ts'], 19) . "  $comment_display\n";
         }
         break;
     case 'checkout':

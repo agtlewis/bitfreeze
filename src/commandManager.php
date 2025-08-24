@@ -268,14 +268,40 @@ class CommandManager {
         // Add comment to commit file
         $fs_manager->writeFileContents($commit_path, "\n\n# " . $comment . "\n", FILE_APPEND);
 
+        // For new archives (first commit), include bitfreeze.php script and README.txt for self-contained archives
+        $include_script_and_readme = ($next_id === 1);
+        if ($include_script_and_readme) {
+            // Place a copy of the current script at archive root for self-contained archives
+            copy(__FILE__, "$temp/bitfreeze.php");
+            
+            // Generate README.txt at archive root
+            file_put_contents("$temp/README.txt", README_TEXT);
+        }
+
         // Create RAR command - change to temp directory to avoid full path in archive
         $current_dir = getcwd();
         chdir($temp);
         
-        $rar_cmd = $this->generateRarArchiveCommand($rarfile, escapeshellarg("versions/$commit_filename"), $password, $args->getFlag('--low-priority'));
+        // Build list of items to add to archive
+        $items_to_add = ["versions/$commit_filename"];
+        $item_count = 1;
+        
+        // Add script and README for new archives
+        if ($include_script_and_readme) {
+            if (file_exists("bitfreeze.php")) {
+                $items_to_add[] = "bitfreeze.php";
+                $item_count++;
+            }
+            if (file_exists("README.txt")) {
+                $items_to_add[] = "README.txt";
+                $item_count++;
+            }
+        }
+        
+        $rar_cmd = $this->generateRarArchiveCommand($rarfile, implode(" ", array_map('escapeshellarg', $items_to_add)), $password, $args->getFlag('--low-priority'));
 
         // Execute RAR command with progress
-        $this->progress_manager->executeRarWithProgress($rar_cmd, 1); // Single commit file
+        $this->progress_manager->executeRarWithProgress($rar_cmd, $item_count);
         
         // Change back to original directory
         chdir($current_dir);
@@ -1727,6 +1753,16 @@ class CommandManager {
         }
         
         $this->display->success("✅ Created manifest file: $manifest_filename");
+
+        // For new archives (first commit), include bitfreeze.php script and README.txt for self-contained archives
+        $include_script_and_readme = ($commit_id === 1);
+        if ($include_script_and_readme) {
+            // Place a copy of the current script at archive root for self-contained archives
+            copy(__FILE__, "$temp/bitfreeze.php");
+            
+            // Generate README.txt at archive root
+            file_put_contents("$temp/README.txt", README_TEXT);
+        }
         
         // Create images metadata if we have any images
         $has_images = false;
@@ -1765,6 +1801,18 @@ class CommandManager {
         
         // Build the RAR command to add all items at once
         $items_to_add = ["versions/$manifest_filename"];
+        
+        // Add script and README for new archives
+        if ($include_script_and_readme) {
+            if (file_exists("bitfreeze.php")) {
+                $items_to_add[] = "bitfreeze.php";
+                $total_items_to_add++;
+            }
+            if (file_exists("README.txt")) {
+                $items_to_add[] = "README.txt";
+                $total_items_to_add++;
+            }
+        }
         
         if ($system_meta_count > 0) {
             $items_to_add[] = "system_meta";

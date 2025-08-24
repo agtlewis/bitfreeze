@@ -52,7 +52,7 @@ case "$1" in
         echo "✅ Cleanup completed!"
         ;;
     
-    "help"|"")
+    "help")
         echo "BitFreeze Build Script"
         echo ""
         echo "Usage: $0 <command>"
@@ -69,6 +69,70 @@ case "$1" in
         echo "  1. Work on dev_bitfreeze.php"
         echo "  2. Run '$0 test-dev' to test changes"
         echo "  3. Run '$0 release' when ready to deploy"
+        ;;
+    
+    "")
+        # Interactive menu when no arguments provided
+        echo "🚀 BitFreeze Build Script - Interactive Menu"
+        echo "============================================="
+        echo ""
+        echo "Available actions:"
+        echo "  1. Test development version"
+        echo "  2. Test compiled version"
+        echo "  3. Compile to production"
+        echo "  4. Full release process"
+        echo "  5. Clean up temporary files"
+        echo "  6. Show help"
+        echo "  0. Exit"
+        echo ""
+        
+        while true; do
+            read -p "Enter your choice (0-6): " choice
+            case $choice in
+                1)
+                    echo ""
+                    echo "🧪 Running tests on development version..."
+                    $0 test-dev
+                    break
+                    ;;
+                2)
+                    echo ""
+                    echo "🧪 Running tests on compiled version..."
+                    $0 test-compiled
+                    break
+                    ;;
+                3)
+                    echo ""
+                    echo "🔨 Compiling BitFreeze..."
+                    $0 compile
+                    break
+                    ;;
+                4)
+                    echo ""
+                    echo "🚀 Running full release process..."
+                    $0 release
+                    break
+                    ;;
+                5)
+                    echo ""
+                    echo "🧹 Cleaning up temporary files..."
+                    $0 clean
+                    break
+                    ;;
+                6)
+                    echo ""
+                    $0 help
+                    break
+                    ;;
+                0)
+                    echo "👋 Goodbye!"
+                    exit 0
+                    ;;
+                *)
+                    echo "❌ Invalid choice. Please enter a number between 0 and 6."
+                    ;;
+            esac
+        done
         ;;
     
     *)

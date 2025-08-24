@@ -345,16 +345,19 @@ if (basename(__FILE__) === basename($_SERVER['SCRIPT_NAME'] ?? '')) {
         $versions = $archive_manager->listVersions($archive);
         
         if (empty($versions)) {
-            echo "No commits found in repository.\n";
+            echo "No commits found.\n";
             return;
         }
         
-        $display = new DisplayManager();
-        $display->header("COMMITS");
+        // Use reference.php format for list display
+        echo "Available Commits (most recent first):\n";
+        echo "ID    Date/Time           Comment\n";
+        echo "----------------------------------------\n";
         
-        foreach ($versions as $version) {
-            $commit_display = $display->formatCommitDisplay($version);
-            echo "Commit {$commit_display}\n";
+        foreach ($versions as $v) {
+            $comment = $archive_manager->getCommentFromManifest($archive, $v['name']);
+            $comment_display = strlen($comment) > 40 ? substr($comment, 0, 37) . '...' : $comment;
+            echo str_pad($v['id'], 4) . "  " . str_pad($v['ts'], 19) . "  $comment_display\n";
         }
         break;
     case 'checkout':

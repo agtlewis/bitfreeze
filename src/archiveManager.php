@@ -246,6 +246,49 @@ class ArchiveManager {
     }
     
     /**
+     * Get comment from manifest file
+     * 
+     * @param string $rarfile Path to RAR archive
+     * @param string $manifest_name Manifest file name
+     * @return string Comment text or "No comment"
+     */
+    public function getCommentFromManifest(string $rarfile, string $manifest_name): string {
+        $temp = sys_get_temp_dir() . '/rarrepo_comment_' . uniqid(mt_rand(), true);
+        mkdir($temp, 0700, true);
+        
+        // Extract the manifest file
+        $rar_cmd = 'rar e -inul';
+        if ($this->password) {
+            $rar_cmd .= ' -hp' . escapeshellarg($this->password);
+        }
+        $rar_cmd .= ' ' . escapeshellarg($rarfile) . ' ' . escapeshellarg($manifest_name) . ' ' . escapeshellarg($temp);
+        
+        exec($rar_cmd, $output, $code);
+        
+        if ($code !== 0) {
+            exec('rm -rf ' . escapeshellarg($temp));
+            return "No comment";
+        }
+        
+        $manifest_path = "$temp/" . basename($manifest_name);
+        if (!file_exists($manifest_path)) {
+            exec('rm -rf ' . escapeshellarg($temp));
+            return "No comment";
+        }
+        
+        // Read the manifest file and extract comment
+        $content = file_get_contents($manifest_path);
+        exec('rm -rf ' . escapeshellarg($temp));
+        
+        // Look for comment in the format "# comment text"
+        if (preg_match('/^# (.+)$/m', $content, $matches)) {
+            return trim($matches[1]);
+        }
+        
+        return "No comment";
+    }
+    
+    /**
      * Get last manifest from archive
      * 
      * @param string $rarfile Path to RAR archive
