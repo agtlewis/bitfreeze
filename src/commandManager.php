@@ -1256,10 +1256,23 @@ class CommandManager {
         $tmp_versions   = "$temp/versions";
         $tmp_kernels    = "$temp/kernels";
         $tmp_system_meta = "$temp/system_meta";
-        mkdir($tmp_files, 0700, true);
-        mkdir($tmp_versions, 0700, true);
-        mkdir($tmp_kernels, 0700, true);
-        mkdir($tmp_system_meta, 0700, true);
+        
+        if (!mkdir($tmp_files, 0700, true)) {
+            $this->display->error("❌ CRITICAL ERROR: Failed to create files directory: $tmp_files");
+            exit(1);
+        }
+        if (!mkdir($tmp_versions, 0700, true)) {
+            $this->display->error("❌ CRITICAL ERROR: Failed to create versions directory: $tmp_versions");
+            exit(1);
+        }
+        if (!mkdir($tmp_kernels, 0700, true)) {
+            $this->display->error("❌ CRITICAL ERROR: Failed to create kernels directory: $tmp_kernels");
+            exit(1);
+        }
+        if (!mkdir($tmp_system_meta, 0700, true)) {
+            $this->display->error("❌ CRITICAL ERROR: Failed to create system_meta directory: $tmp_system_meta");
+            exit(1);
+        }
         // Check if sudo permissions will be needed early
         $sudo_password = null;
         $fs_manager = new FileSystemManager();
@@ -1715,7 +1728,13 @@ class CommandManager {
         $manifest_content = implode("\n", $manifest);
         $manifest_filename = $this->createManifestFilename($commit_id, $timestamp);
         
-        $fs_manager->writeFileContents("$tmp_versions/$manifest_filename", $manifest_content);
+        if (!$fs_manager->writeFileContents("$tmp_versions/$manifest_filename", $manifest_content)) {
+            $this->display->error("❌ CRITICAL ERROR: Failed to create manifest file: $manifest_filename");
+            $this->display->error("❌ Check permissions for directory: $tmp_versions");
+            exit(1);
+        }
+        
+        $this->display->success("✅ Created manifest file: $manifest_filename");
         
         // Create images metadata if we have any images
         $has_images = false;
@@ -1843,7 +1862,7 @@ class CommandManager {
      * @return string Manifest filename
      */
     private function createManifestFilename(int $commit_id, int $timestamp): string {
-        return "$commit_id-" . date('Y-m-d H:i:s', $timestamp) . ".txt";
+        return "$commit_id-" . date('Y-m-d H-i-s', $timestamp) . ".txt";
     }
     
     /**
@@ -1854,7 +1873,7 @@ class CommandManager {
      * @return string Images metadata filename
      */
     private function createImagesFilename(int $commit_id, int $timestamp): string {
-        return "$commit_id-" . date('Y-m-d H:i:s', $timestamp) . ".images.json";
+        return "$commit_id-" . date('Y-m-d H-i-s', $timestamp) . ".images.json";
     }
     
     /**

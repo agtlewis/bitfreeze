@@ -212,7 +212,7 @@ class ArchiveManager {
         }
         
         foreach ($output as $line) {
-            if (preg_match('/^versions\/(\d+)-(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})\.txt$/', $line, $matches)) {
+            if (preg_match('/^versions\/(\d+)-(\d{4})-(\d{2})-(\d{2}) (\d{2})-(\d{2})-(\d{2})\.txt$/', $line, $matches)) {
                 $id = (int)$matches[1];
                 $year = (int)$matches[2];
                 $month = (int)$matches[3];
