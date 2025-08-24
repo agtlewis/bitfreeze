@@ -41,15 +41,15 @@ class ArchiveManager {
             }
         }
         
-        $output = [];
-        $command = 'rar lb ' . escapeshellarg($rarfile);
-        
-        // Use password if available
-        if ($this->password) {
-            $command = 'rar lb -hp' . escapeshellarg($this->password) . ' ' . escapeshellarg($rarfile);
+        $file_size = filesize($rarfile);
+        if ($file_size === 0) {
+            return false;
         }
         
-        exec($command, $output, $code);
+        // Try to list archive contents without password, using an approach that won't trigger a password prompt
+        $rar_cmd = 'printf "" | rar lb -inul ' . escapeshellarg($rarfile) . ' 2>/dev/null';
+        
+        exec($rar_cmd, $output, $code);
         
         // If RAR command fails, it's likely encrypted
         return $code !== 0;
@@ -208,11 +208,15 @@ class ArchiveManager {
         exec($rar_cmd, $output, $code);
         
         if ($code !== 0) {
+            // If command failed and we have a password, it might be wrong
+            if ($this->password && ($code === 10 || $code === 11)) {
+                throw new Exception("Incorrect password for archive");
+            }
             return $versions;
         }
         
         foreach ($output as $line) {
-            if (preg_match('/^versions\/(\d+)-(\d{4})-(\d{2})-(\d{2}) (\d{2})-(\d{2})-(\d{2})\.txt$/', $line, $matches)) {
+            if (preg_match('/^versions\/(\d+)-(\d{4})-(\d{2})-(\d{2}) (\d{2})[-:](\d{2})[-:](\d{2})\.txt$/', $line, $matches)) {
                 $id = (int)$matches[1];
                 $year = (int)$matches[2];
                 $month = (int)$matches[3];

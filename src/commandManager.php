@@ -272,11 +272,7 @@ class CommandManager {
         $current_dir = getcwd();
         chdir($temp);
         
-        $rar_cmd = "rar a -hp" . escapeshellarg($password) . " " . escapeshellarg($rarfile) . " " . escapeshellarg("versions/$commit_filename");
-        
-        if ($args->getFlag('--low-priority')) {
-            $rar_cmd = "nice -n 19 " . $rar_cmd;
-        }
+        $rar_cmd = $this->generateRarArchiveCommand($rarfile, escapeshellarg("versions/$commit_filename"), $password, $args->getFlag('--low-priority'));
 
         // Execute RAR command with progress
         $this->progress_manager->executeRarWithProgress($rar_cmd, 1); // Single commit file
@@ -289,14 +285,7 @@ class CommandManager {
             // Change to temp directory to avoid full path in archive
             chdir($temp);
             
-            $rar_cmd = "rar a " . escapeshellarg($rarfile) . " files";
-            if ($password !== null) {
-                $rar_cmd = "rar a -hp" . escapeshellarg($password) . " " . escapeshellarg($rarfile) . " files";
-            }
-            
-            if ($args->getFlag('--low-priority')) {
-                $rar_cmd = "nice -n 10 " . $rar_cmd;
-            }
+            $rar_cmd = $this->generateRarArchiveCommand($rarfile, "files", $password, $args->getFlag('--low-priority'));
 
             $this->progress_manager->executeRarWithProgress($rar_cmd, $add_count);
             
@@ -1522,16 +1511,19 @@ class CommandManager {
             
             // Check if this file should be excluded based on exclusion patterns
             if ($fs_manager->shouldSkipFile($rel, $exclude_patterns)) {
-                  // Only show debug for first few skipped files to avoid spam
-                  if ($skipped_count < 10) {
-                      debug_echo("\r\033[K" . "⚠️  DEBUG: Skipping excluded file: $rel\n");
-                  } elseif ($skipped_count === 10) {
-                      debug_echo("\r\033[K" . "⚠️  DEBUG: Additional excluded files will be skipped silently...\n");
-                  }
-                  $skipped_count++;
-                  $skipped_files[] = $rel;
-                  $skipped_reasons[$rel] = "File excluded by pattern";
-                  continue;
+                debug_echo("\r\033[K" . "⚠️  DEBUG: Skipping excluded file: $rel\n");
+
+                // Only show debug for first few skipped files to avoid spam
+                // if ($skipped_count < 10) {
+                //     debug_echo("\r\033[K" . "⚠️  DEBUG: Skipping excluded file: $rel\n");
+                // } elseif ($skipped_count === 10) {
+                //     debug_echo("\r\033[K" . "⚠️  DEBUG: Additional excluded files will be skipped silently...\n");
+                // }
+
+                $skipped_count++;
+                $skipped_files[] = $rel;
+                $skipped_reasons[$rel] = "File excluded by pattern";
+                continue;
             }
             
             if ($file->isLink()) {
@@ -1786,15 +1778,7 @@ class CommandManager {
         }
         
         // Build RAR command with password if needed
-        if ($password !== null) {
-            $rar_cmd = "rar a -hp" . escapeshellarg($password) . " " . escapeshellarg($rarfile) . " " . implode(" ", $items_to_add);
-        } else {
-            $rar_cmd = "rar a " . escapeshellarg($rarfile) . " " . implode(" ", $items_to_add);
-        }
-        
-        if ($low_priority) {
-            $rar_cmd = "nice -n 10 " . $rar_cmd;
-        }
+        $rar_cmd = $this->generateRarArchiveCommand($rarfile, implode(" ", $items_to_add), $password, $low_priority);
         
         echo "\r\033[K" . $this->display->colorize("📦 Adding all files to repository in single operation...", DisplayManager::COLOR_BRIGHT_GREEN);
         $this->progress_manager->executeRarWithProgress($rar_cmd, $total_items_to_add);
@@ -1874,6 +1858,31 @@ class CommandManager {
      */
     private function createImagesFilename(int $commit_id, int $timestamp): string {
         return "$commit_id-" . date('Y-m-d H-i-s', $timestamp) . ".images.json";
+    }
+    
+    /**
+     * Generate RAR archive command with standard options
+     * 
+     * @param string $rarfile Path to RAR archive file
+     * @param string $items Items to add to archive (space-separated)
+     * @param string|null $password Optional password for encryption
+     * @param bool $low_priority Whether to use low priority (nice)
+     * @return string Complete RAR command
+     */
+    private function generateRarArchiveCommand(string $rarfile, string $items, ?string $password = null, bool $low_priority = false): string {
+        $rar_cmd = "rar a -r -rr" . RECOVERY_RECORD_SIZE . "% -m3";
+        
+        if ($low_priority) {
+            $rar_cmd = "nice -n 10 $rar_cmd";
+        }
+        
+        if ($password !== null) {
+            $rar_cmd .= " -hp" . escapeshellarg($password);
+        }
+        
+        $rar_cmd .= " " . escapeshellarg($rarfile) . " " . $items;
+        
+        return $rar_cmd;
     }
     
     /**
@@ -2335,14 +2344,7 @@ class CommandManager {
         chdir($batch_temp);
 
         // Prepare RAR command
-        $rar_cmd = "rar a";
-        if ($low_priority) {
-            $rar_cmd = "nice -n 10 $rar_cmd";
-        }
-        if ($password !== null) {
-            $rar_cmd .= " -hp" . escapeshellarg($password);
-        }
-        $rar_cmd .= " " . escapeshellarg($rarfile) . " files";
+        $rar_cmd = $this->generateRarArchiveCommand($rarfile, "files", $password, $low_priority);
 
         // Progress manager for RAR (if you have such a method)
         $this->progress_manager->executeRarWithProgress($rar_cmd, count($batch_files_list));

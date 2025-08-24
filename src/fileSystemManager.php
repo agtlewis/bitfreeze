@@ -624,15 +624,18 @@ class FileSystemManager {
         static $approved_device_ids = [];
         static $device_to_mount_cache = [];
         static $circular_ref_context = [];
+        static $last_root_dir = null;
         
         // Reset static variables if this is a new root directory scan
-        if ($dir === '/' || $dir === '\\') {
+        // Check if this is a top-level call (start_device_id is null) and it's a different directory
+        if ($start_device_id === null && $last_root_dir !== $dir) {
             $processed_dirs = [];
             $file_count = 0;
             $depth_tracker = [];
             $approved_device_ids = [];
             $device_to_mount_cache = [];
             $circular_ref_context = [];
+            $last_root_dir = $dir;
         }
         
         // Get device ID of the starting directory for partition boundary detection
@@ -643,7 +646,7 @@ class FileSystemManager {
                 debug_echo("\r\033[K" . "⚠️  DEBUG: Cannot determine device ID for: $dir\n");
                 return;
             }
-            debug_echo("\r\033[K" . "🔍 DEBUG: Starting partition scan with device ID: $start_device_id for: $dir\n");
+            //debug_echo("\r\033[K" . "🔍 DEBUG: Starting partition scan with device ID: $start_device_id for: $dir\n");
             
             // Pre-compute approved device IDs for O(1) lookups
             $this->buildApprovedDeviceCache($selected_partitions, $approved_device_ids, $device_to_mount_cache);
@@ -698,7 +701,7 @@ class FileSystemManager {
         
         // Debug: Show current directory being processed (less verbose)
         if ($file_count % 10000 === 0) {
-            debug_echo("\r\033[K" . "🔍 DEBUG: Processing directory: $relative_path (Total files: " . number_format($file_count) . ")\n");
+            //debug_echo("\r\033[K" . "🔍 DEBUG: Processing directory: $relative_path (Total files: " . number_format($file_count) . ")\n");
         }
         
         try {
@@ -713,7 +716,7 @@ class FileSystemManager {
                         // This is a symlinked directory - yield it as a file, don't traverse into it
                         // unless --follow-symlinks is enabled
                         if (!$follow_symlinks) {
-                            debug_echo("\r\033[K" . "🔗 DEBUG: Yielding symlinked directory (not traversing): $subdir_path\n");
+                            //debug_echo("\r\033[K" . "🔗 DEBUG: Yielding symlinked directory (not traversing): $subdir_path\n");
                             $file_count++;
                             yield $subdir_path; // Yield the symlink itself as a file
                             continue; // Don't traverse into the symlinked directory
@@ -723,8 +726,9 @@ class FileSystemManager {
                     }
                     
                     // Fast partition check using pre-computed device ID cache
-                    if ($this->shouldSkipUnselectedPartitionFast($subdir_path, $approved_device_ids, $device_to_mount_cache)) {
-                        debug_echo("\r\033[K" . "🚫 DEBUG: Skipping unselected partition: $subdir_path\n");
+                    // Only apply partition boundaries when specific partitions are selected (system backup)
+                    if (!empty($selected_partitions) && $this->shouldSkipUnselectedPartitionFast($subdir_path, $approved_device_ids, $device_to_mount_cache)) {
+                        //debug_echo("\r\033[K" . "🚫 DEBUG: Skipping unselected partition: $subdir_path\n");
                         continue; // Skip this subdirectory - it's on an unselected partition
                     }
                     
@@ -746,7 +750,7 @@ class FileSystemManager {
         } catch (UnexpectedValueException $e) {
             // Permission denied - if we have sudo, try to access with elevated privileges
             if ($this->sudo_password !== null && $this->can_elevate) {
-                debug_echo("\r\033[K" . "🔐 DEBUG: Using sudo fallback for: $dir\n");
+                //debug_echo("\r\033[K" . "🔐 DEBUG: Using sudo fallback for: $dir\n");
                 
                 // Try to list directory contents with sudo for complete coverage
                 $escaped_dir = escapeshellarg($dir);
@@ -757,7 +761,7 @@ class FileSystemManager {
                 exec("printf '%s\n' " . escapeshellarg($this->sudo_password) . " | $command", $output, $return_code);
                 
                 if ($return_code === 0) {
-                    debug_echo("\r\033[K" . "✅ DEBUG: Sudo fallback successful, found " . count($output) . " files in $dir\n");
+                    //debug_echo("\r\033[K" . "✅ DEBUG: Sudo fallback successful, found " . count($output) . " files in $dir\n");
                     
                     // Successfully accessed with sudo, yield the files
                     foreach ($output as $filepath) {
@@ -775,7 +779,7 @@ class FileSystemManager {
                     
                     // CRITICAL: Don't recursively process subdirectories when using sudo fallback
                     // This was causing the infinite loop - we're already getting all files from find
-                    debug_echo("\r\033[K" . "⚠️  DEBUG: Skipping recursive processing for sudo fallback directory: $dir\n");
+                    //debug_echo("\r\033[K" . "⚠️  DEBUG: Skipping recursive processing for sudo fallback directory: $dir\n");
                     return;
                 } else {
                     debug_echo("\r\033[K" . "❌ DEBUG: Sudo command failed for: $dir (exit code: $return_code)\n");
@@ -1077,7 +1081,7 @@ class FileSystemManager {
                         // This is a symlinked directory - yield it but don't traverse into it
                         // unless --follow-symlinks is enabled
                         if (!$follow_symlinks) {
-                            debug_echo("\r\033[K" . "🔗 DEBUG: Yielding symlinked directory (not traversing): $subdir_path\n");
+                            //debug_echo("\r\033[K" . "🔗 DEBUG: Yielding symlinked directory (not traversing): $subdir_path\n");
                             yield $file->getPathname(); // Yield the symlink directory itself
                             continue; // Don't traverse into the symlinked directory
                         } else {
@@ -1086,8 +1090,9 @@ class FileSystemManager {
                     }
                     
                     // Fast partition check using pre-computed device ID cache
-                    if ($this->shouldSkipUnselectedPartitionFast($subdir_path, $approved_device_ids, $device_to_mount_cache)) {
-                        debug_echo("\r\033[K" . "🚫 DEBUG: Skipping unselected partition (dirs): $subdir_path\n");
+                    // Only apply partition boundaries when specific partitions are selected (system backup)
+                    if (!empty($selected_partitions) && $this->shouldSkipUnselectedPartitionFast($subdir_path, $approved_device_ids, $device_to_mount_cache)) {
+                        //debug_echo("\r\033[K" . "🚫 DEBUG: Skipping unselected partition (dirs): $subdir_path\n");
                         continue; // Skip this subdirectory - it's on an unselected partition
                     }
                     
@@ -1561,7 +1566,7 @@ class FileSystemManager {
         $mount_point = $this->getPartitionMountPointForPath($path);
         foreach ($selected_partitions as $partition) {
             if ($partition['mount_point'] === $mount_point) {
-                debug_echo("\r\033[K" . "✅ DEBUG: Allowing selected partition: $path (mount: $mount_point)\n");
+                //debug_echo("\r\033[K" . "✅ DEBUG: Allowing selected partition: $path (mount: $mount_point)\n");
                 return false; // This partition is selected, don't skip
             }
         }
