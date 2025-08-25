@@ -123,14 +123,14 @@ function compile(): bool {
         }
         
         // Create backup of existing bitfreeze.php if it exists
-        if (file_exists(PROD_FILE)) {
-            $backup_file = PROD_FILE . '.backup.' . date('Y-m-d_H-i-s');
-            if (!copy(PROD_FILE, $backup_file)) {
-                echo "❌ Error: Could not create backup of bitfreeze.php\n";
-                return false;
-            }
-            echo "   Created backup: " . basename($backup_file) . "\n";
-        }
+        // if (file_exists(PROD_FILE)) {
+        //     $backup_file = PROD_FILE . '.backup.' . date('Y-m-d_H-i-s');
+        //     if (!copy(PROD_FILE, $backup_file)) {
+        //         echo "❌ Error: Could not create backup of bitfreeze.php\n";
+        //         return false;
+        //     }
+        //     echo "   Created backup: " . basename($backup_file) . "\n";
+        // }
         
         // Process the main file and inline all requires
         $processed_files = [];

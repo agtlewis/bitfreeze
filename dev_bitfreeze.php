@@ -42,7 +42,7 @@
 
  * 
  * @author Benjamin Lewis <net@p9b.org>
- * @version 1.0
+ * @version 2.0
  * @license MIT
  */
 
@@ -61,9 +61,10 @@
 define('RECOVERY_RECORD_SIZE', 6); // Set as a percentage
 define('PROGRESS_BAR_WIDTH', 49); // Sets the width of the progress bar in the terminal
 define('MD5_TIMEOUT', 600); // Maximum time in seconds to calculate MD5 hash of a file
-define('BATCH_SIZE_PERCENTAGE', 30); // Use 30% of available temp disk space for batch processing
-define('BF_DEBUG_MODE', true); // Set to false to disable all debug output
+define('BATCH_SIZE_PERCENTAGE', 70); // Use 30% of available temp disk space for batch processing
+define('BF_DEBUG_MODE', false); // Set to false to disable all debug output
 define('BF_DEBUG_LOGS', true); // write debug logs
+define('BF_ENCRYPTION_MODE', '-p'); // -hp = Encrypt files & headers, -p = Encrypted files only (faster)
 
 require_once __DIR__ . '/src/commandManager.php';
 require_once __DIR__ . '/src/systemManager.php';
@@ -121,8 +122,6 @@ function debug_echo(string $message): array {
             }
         }
         
-
-        
         // Write message to log file if we have a handle
         if ($log_handle) {
             // Strip ANSI color codes and control characters for log file
@@ -137,7 +136,6 @@ function debug_echo(string $message): array {
             fflush($log_handle);
         }
     }
-
 
     return [
         'log_file' => $log_file,
@@ -159,8 +157,6 @@ function debug_exit_handler(): void {
 
 // Register exit handler
 register_shutdown_function('debug_exit_handler');
-
-// CLI helper functions removed - FileSystemManager should be used instead
 
 define('USAGE_TEXT', <<<USAGE
 Usage:
@@ -225,11 +221,6 @@ Files are stored as content hashes in 'files/' and snapshot manifests in 'versio
 Comments are stored as .comment files alongside manifests.
 README);
 
-if (!defined('STDIN')) {
-    echo "NOTICE: STDIN not defined, using php://stdin\n";
-    define('STDIN', fopen('php://stdin', 'r'));
-}
-
 // Validate system requirements
 $system_health = new SystemHealthManager();
 if (!$system_health->validateSystemRequirements()) {
@@ -248,6 +239,11 @@ if (!$system_health->validateSystemRequirements()) {
  * @return void
  */
 if (basename(__FILE__) === basename($_SERVER['SCRIPT_NAME'] ?? '')) {
+    if (!defined('STDIN')) {
+        echo "NOTICE: STDIN not defined, using php://stdin\n";
+        define('STDIN', fopen('php://stdin', 'r'));
+    }
+
     if ($argc < 2) {
         $command_manager = new CommandManager();
         $command_manager->showUsage();
@@ -260,226 +256,224 @@ if (basename(__FILE__) === basename($_SERVER['SCRIPT_NAME'] ?? '')) {
     $fs_manager = new FileSystemManager();
 
     switch ($cmd) {
-    case 'commit':
-        if ($args->getCount() < 4 || $args->getCount() > 7) {
+        case 'commit':
+            if ($args->getCount() < 4 || $args->getCount() > 7) {
+                $command_manager = new CommandManager();
+                $command_manager->showUsage();
+            }
+            $cleaned = $args->getCleanedFromZero();
+            
+            // Initialize system manager first
+            $system_manager = new SystemManager();
+            
+            // Convert all paths to absolute paths early and validate
+            $folder = $system_manager->getAbsolutePath($cleaned[1]);
+            $archive = $system_manager->getAbsolutePath($cleaned[2]);
+            
+            // Validate paths exist
+            if (!$fs_manager->isDirectory($folder)) {
+                echo "ERROR: Folder '$folder' does not exist.\n";
+                exit(1);
+            }
+            
+            if (!$fs_manager->directoryIsWritable(dirname($archive))) {
+                echo "ERROR: Cannot write to archive location '$archive' (permission denied).\n";
+                exit(1);
+            }
+            
+            $comment = count($cleaned) >= 4 ? $cleaned[3] : "Automated Commit";
+            
+            // Use proper password detection - repository may already exist and be encrypted
+            $password_manager = new PasswordManager();
+            $password = $password_manager->getPasswordWithDetection($archive);
+            
             $command_manager = new CommandManager();
-            $command_manager->showUsage();
-        }
-        $cleaned = $args->getCleanedFromZero();
-        
-        // Initialize system manager first
-        $system_manager = new SystemManager();
-        
-        // Convert all paths to absolute paths early and validate
-        $folder = $system_manager->getAbsolutePath($cleaned[1]);
-        $archive = $system_manager->getAbsolutePath($cleaned[2]);
-        
-        // Validate paths exist
-        if (!$fs_manager->isDirectory($folder)) {
-            echo "ERROR: Folder '$folder' does not exist.\n";
-            exit(1);
-        }
-        
-        if (!$fs_manager->directoryIsWritable(dirname($archive))) {
-            echo "ERROR: Cannot write to archive location '$archive' (permission denied).\n";
-            exit(1);
-        }
-        
-        $comment = count($cleaned) >= 4 ? $cleaned[3] : "Automated Commit";
-        
-        // Use proper password detection - repository may already exist and be encrypted
-        $password_manager = new PasswordManager();
-        $password = $password_manager->getPasswordWithDetection($archive);
-        
-        $command_manager = new CommandManager();
-        $command_manager->commit($folder, $archive, $comment, $password);
-        break;
-    case 'system-backup':
-        if ($args->getCount() < 2 || $args->getCount() > 4) {
+            $command_manager->commit($folder, $archive, $comment, $password);
+            break;
+        case 'system-backup':
+            if ($args->getCount() < 2 || $args->getCount() > 4) {
+                $command_manager = new CommandManager();
+                $command_manager->showUsage();
+            }
+            $cleaned = $args->getCleanedFromZero();
+            
+            // Initialize system manager first
+            $system_manager = new SystemManager();
+            
+            // Convert archive path to absolute and validate
+            $archive = $system_manager->getAbsolutePath($cleaned[1]);
+            
+            if (!$fs_manager->directoryIsWritable(dirname($archive))) {
+                echo "ERROR: Cannot write to archive location '$archive' (permission denied).\n";
+                exit(1);
+            }
+            
+            $comment = count($cleaned) >= 3 ? $cleaned[2] : "System Backup";
+            
+            // Use proper password detection - repository may already exist and be encrypted
+            $password_manager = new PasswordManager();
+            $password = $password_manager->getPasswordWithDetection($archive);
+            
             $command_manager = new CommandManager();
-            $command_manager->showUsage();
-        }
-        $cleaned = $args->getCleanedFromZero();
-        
-        // Initialize system manager first
-        $system_manager = new SystemManager();
-        
-        // Convert archive path to absolute and validate
-        $archive = $system_manager->getAbsolutePath($cleaned[1]);
-        
-        if (!$fs_manager->directoryIsWritable(dirname($archive))) {
-            echo "ERROR: Cannot write to archive location '$archive' (permission denied).\n";
-            exit(1);
-        }
-        
-        $comment = count($cleaned) >= 3 ? $cleaned[2] : "System Backup";
-        
-        // Use proper password detection - repository may already exist and be encrypted
-        $password_manager = new PasswordManager();
-        $password = $password_manager->getPasswordWithDetection($archive);
-        
-        $command_manager = new CommandManager();
-        $command_manager->systemBackup($archive, $comment, $password);
-        break;
-    case 'list':
-        if ($args->getCount() < 2 || $args->getCount() > 4) {
+            $command_manager->systemBackup($archive, $comment, $password);
+            break;
+        case 'list':
+            if ($args->getCount() < 2 || $args->getCount() > 4) {
+                $command_manager = new CommandManager();
+                $command_manager->showUsage();
+            }
+            $cleaned = $args->getCleanedFromZero();
+            $system_manager = new SystemManager();
+            
+            // Convert archive path to absolute and validate
+            $archive = $system_manager->getAbsolutePath($cleaned[1]);
+            
+            if (!$fs_manager->fileExists($archive)) {
+                echo "ERROR: Archive '$archive' does not exist.\n";
+                exit(1);
+            }
+            
+            // Use the same approach as the working reference code
+            $password_manager = new PasswordManager();
+            $password = $password_manager->getPasswordWithDetection($archive);
+            
+            $archive_manager = new ArchiveManager($password);
+            $versions = $archive_manager->listVersions($archive);
+            
+            if (empty($versions)) {
+                echo "No commits found.\n";
+                return;
+            }
+            
+            // Use reference.php format for list display
+            echo "Available Commits (most recent first):\n";
+            echo "ID    Date/Time           Comment\n";
+            echo "----------------------------------------\n";
+            
+            foreach ($versions as $v) {
+                $comment = $archive_manager->getCommentFromManifest($archive, $v['name']);
+                $comment_display = strlen($comment) > 40 ? substr($comment, 0, 37) . '...' : $comment;
+                echo str_pad($v['id'], 4) . "  " . str_pad($v['ts'], 19) . "  $comment_display\n";
+            }
+            break;
+        case 'checkout':
+            if ($args->getCount() < 4 || $args->getCount() > 5) {
+                $command_manager = new CommandManager();
+                $command_manager->showUsage();
+            }
+
+            $cleaned = $args->getCleanedFromZero();
+            $system_manager = new SystemManager();
+            
+            // Convert all paths to absolute paths early and validate
+            $commit_id = $cleaned[1];
+            $repository = $system_manager->getAbsolutePath($cleaned[2]);
+            $outdir = $system_manager->getAbsolutePath($cleaned[3]);
+            
+            // Validate paths exist
+            if (!$fs_manager->fileExists($repository)) {
+                echo "ERROR: Archive '$repository' does not exist.\n";
+                exit(1);
+            }
+            
+            if (!$fs_manager->directoryIsWritable(dirname($outdir))) {
+                echo "ERROR: Cannot write to output directory '$outdir' (permission denied).\n";
+                exit(1);
+            }
+            
+            // Use proper password detection with automatic prompting for encrypted archives
+            $password_manager = new PasswordManager();
+            $password = $password_manager->getPasswordWithDetection($repository);
+            
             $command_manager = new CommandManager();
-            $command_manager->showUsage();
-        }
-        $cleaned = $args->getCleanedFromZero();
-        $system_manager = new SystemManager();
-        
-        // Convert archive path to absolute and validate
-        $archive = $system_manager->getAbsolutePath($cleaned[1]);
-        
-        if (!$fs_manager->fileExists($archive)) {
-            echo "ERROR: Archive '$archive' does not exist.\n";
-            exit(1);
-        }
-        
-        // Use the same approach as the working reference code
-        $password_manager = new PasswordManager();
-        $password = $password_manager->getPasswordWithDetection($archive);
-        
-        $archive_manager = new ArchiveManager($password);
-        $versions = $archive_manager->listVersions($archive);
-        
-        if (empty($versions)) {
-            echo "No commits found.\n";
-            return;
-        }
-        
-        // Use reference.php format for list display
-        echo "Available Commits (most recent first):\n";
-        echo "ID    Date/Time           Comment\n";
-        echo "----------------------------------------\n";
-        
-        foreach ($versions as $v) {
-            $comment = $archive_manager->getCommentFromManifest($archive, $v['name']);
-            $comment_display = strlen($comment) > 40 ? substr($comment, 0, 37) . '...' : $comment;
-            echo str_pad($v['id'], 4) . "  " . str_pad($v['ts'], 19) . "  $comment_display\n";
-        }
-        break;
-    case 'checkout':
-        if ($args->getCount() < 4 || $args->getCount() > 5) {
-        $command_manager = new CommandManager();
-        $command_manager->showUsage();
-    }
-        $cleaned = $args->getCleanedFromZero();
-        $system_manager = new SystemManager();
-        
-        // Convert all paths to absolute paths early and validate
-        $commit_id = $cleaned[1];
-        $repository = $system_manager->getAbsolutePath($cleaned[2]);
-        $outdir = $system_manager->getAbsolutePath($cleaned[3]);
-        
-        // Validate paths exist
-        if (!$fs_manager->fileExists($repository)) {
-            echo "ERROR: Archive '$repository' does not exist.\n";
-            exit(1);
-        }
-        
-        if (!$fs_manager->directoryIsWritable(dirname($outdir))) {
-            echo "ERROR: Cannot write to output directory '$outdir' (permission denied).\n";
-            exit(1);
-        }
-        
-        // Use proper password detection with automatic prompting for encrypted archives
-        $password_manager = new PasswordManager();
-        $password = $password_manager->getPasswordWithDetection($repository);
-        
-        $command_manager = new CommandManager();
-        $command_manager->checkout($commit_id, $repository, $outdir, $password);
-        break;
-    case 'diff':
-        if ($args->getCount() !== 5) {
+            $command_manager->checkout($commit_id, $repository, $outdir, $password);
+            break;
+        case 'diff':
+            if ($args->getCount() !== 5) {
+                $command_manager = new CommandManager();
+                $command_manager->showUsage();
+            }
+
+            $cleaned = $args->getCleanedFromZero();
+            $system_manager = new SystemManager();
+            
+            // Convert archive path to absolute and validate
+            $version1_id = $cleaned[1];
+            $version2_id = $cleaned[2];
+            $archive = $system_manager->getAbsolutePath($cleaned[3]);
+            
+            if (!$fs_manager->fileExists($archive)) {
+                echo "ERROR: Archive '$archive' does not exist.\n";
+                exit(1);
+            }
+            
+            $password_manager = new PasswordManager();
+            $password = $password_manager->getPasswordWithDetection($archive);
+
             $command_manager = new CommandManager();
-            $command_manager->showUsage();
-        }
-        $cleaned = $args->getCleanedFromZero();
-        $system_manager = new SystemManager();
-        
-        // Convert archive path to absolute and validate
-        $version1_id = $cleaned[1];
-        $version2_id = $cleaned[2];
-        $archive = $system_manager->getAbsolutePath($cleaned[3]);
-        
-        if (!$fs_manager->fileExists($archive)) {
-            echo "ERROR: Archive '$archive' does not exist.\n";
-            exit(1);
-        }
-        
-        $password_manager = new PasswordManager();
-        $password = $password_manager->getPasswordWithDetection($archive);
-        $command_manager = new CommandManager();
-        $command_manager->diff($version1_id, $version2_id, $archive, $password);
-        break;
-    case 'status':
-        if ($args->getCount() < 3 || $args->getCount() > 5) {
+            $command_manager->diff($version1_id, $version2_id, $archive, $password);
+            break;
+        case 'status':
+            if ($args->getCount() < 3 || $args->getCount() > 5) {
+                $command_manager = new CommandManager();
+                $command_manager->showUsage();
+            }
+            $cleaned = $args->getCleanedFromZero();
+            $system_manager = new SystemManager();
+            
+            // Convert all paths to absolute paths early and validate
+            $folder = $system_manager->getAbsolutePath($cleaned[1]);
+            $archive = $system_manager->getAbsolutePath($cleaned[2]);
+            
+            // Validate paths exist
+            if (!$fs_manager->isDirectory($folder)) {
+                echo "ERROR: Folder '$folder' does not exist.\n";
+                exit(1);
+            }
+            
+            if (!$fs_manager->fileExists($archive)) {
+                echo "ERROR: Archive '$archive' does not exist.\n";
+                exit(1);
+            }
+            
+            // Use proper password detection with automatic prompting for encrypted archives
+            $password_manager = new PasswordManager();
+            $password = $password_manager->getPasswordWithDetection($archive);
+            
+            $include_meta = $args->getFlag('--include-meta');
+            $include_checksum = $args->getFlag('--checksum');
             $command_manager = new CommandManager();
-            $command_manager->showUsage();
-        }
-        $cleaned = $args->getCleanedFromZero();
-        $system_manager = new SystemManager();
-        
-        // Convert all paths to absolute paths early and validate
-        $folder = $system_manager->getAbsolutePath($cleaned[1]);
-        $archive = $system_manager->getAbsolutePath($cleaned[2]);
-        
-        // Validate paths exist
-        if (!$fs_manager->isDirectory($folder)) {
-            echo "ERROR: Folder '$folder' does not exist.\n";
-            exit(1);
-        }
-        
-        if (!$fs_manager->fileExists($archive)) {
-            echo "ERROR: Archive '$archive' does not exist.\n";
-            exit(1);
-        }
-        
-        // Use proper password detection with automatic prompting for encrypted archives
-        $password_manager = new PasswordManager();
-        $password = $password_manager->getPasswordWithDetection($archive);
-        
-        $include_meta = $args->getFlag('--include-meta');
-        $include_checksum = $args->getFlag('--checksum');
-        $command_manager = new CommandManager();
-        $command_manager->status($folder, $archive, $password, $include_meta, $include_checksum);
-        break;
-    case 'repair':
-        if ($args->getCount() < 2 || $args->getCount() > 4) {
+            $command_manager->status($folder, $archive, $password, $include_meta, $include_checksum);
+            break;
+        case 'repair':
+            if ($args->getCount() < 2 || $args->getCount() > 4) {
+                $command_manager = new CommandManager();
+                $command_manager->showUsage();
+            }
+            $cleaned = $args->getCleanedFromZero();
+            $system_manager = new SystemManager();
+            
+            // Convert archive path to absolute and validate
+            $archive = $system_manager->getAbsolutePath($cleaned[1]);
+            
+            if (!$fs_manager->fileExists($archive)) {
+                echo "ERROR: Archive '$archive' does not exist.\n";
+                exit(1);
+            }
+            
+            // Use proper password detection with automatic prompting for encrypted archives
+            $password_manager = new PasswordManager();
+            $password = $password_manager->getPasswordWithDetection($archive);
+            
             $command_manager = new CommandManager();
-            $command_manager->showUsage();
-        }
-        $cleaned = $args->getCleanedFromZero();
-        $system_manager = new SystemManager();
-        
-        // Convert archive path to absolute and validate
-        $archive = $system_manager->getAbsolutePath($cleaned[1]);
-        
-        if (!$fs_manager->fileExists($archive)) {
-            echo "ERROR: Archive '$archive' does not exist.\n";
-            exit(1);
-        }
-        
-        // Use proper password detection with automatic prompting for encrypted archives
-        $password_manager = new PasswordManager();
-        $password = $password_manager->getPasswordWithDetection($archive);
-        
-        $command_manager = new CommandManager();
-        $command_manager->repair($archive, $password);
-        break;
-    default:
+            $command_manager->repair($archive, $password);
+            break;
+        default:
         $command_manager = new CommandManager();
         $command_manager->showUsage();
         break;
     } // End of switch statement
 } // End of if statement for direct execution
-
-
-
-
-
 
 
 

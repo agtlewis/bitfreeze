@@ -94,7 +94,7 @@ class UtilityManager {
         $rar_cmd = 'rar lb';
 
         if ($password) {
-            $rar_cmd .= ' -hp' . escapeshellarg($password);
+            $rar_cmd .= ' ' . BF_ENCRYPTION_MODE . escapeshellarg($password);
         }
 
         $rar_cmd .= ' ' . escapeshellarg($rarfile) . ' versions/';

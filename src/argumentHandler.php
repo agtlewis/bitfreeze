@@ -18,6 +18,7 @@ class ArgumentHandler {
         } else {
             $this->argv = $argv;
         }
+
         $this->cleaned_argv = $this->clean_argv();
     }
     
@@ -57,26 +58,26 @@ class ArgumentHandler {
      * @return array Cleaned arguments
      */
     private function clean_argv(): array {
-        $cleaned = [];
-        $skip_next = false;
+        $cleaned    = [];
+        $skip_next  = false;
         
         for ($i = 1; $i < count($this->argv); $i++) {
             if ($skip_next) {
                 $skip_next = false;
                 continue;
             }
-            
+
             $arg = $this->argv[$i];
-            
+
             if ($arg === '-p' && isset($this->argv[$i + 1])) {
                 $cleaned[] = $arg;
                 $cleaned[] = $this->argv[$i + 1];
                 $skip_next = true;
-    } else {
+            } else {
                 $cleaned[] = $arg;
             }
         }
-        
+
         return $cleaned;
     }
     

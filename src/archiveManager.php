@@ -8,7 +8,7 @@
  */
 class ArchiveManager {
     private $password;
-    private $progress_manager;
+
     private $fs_manager;
     
     /**
@@ -18,9 +18,8 @@ class ArchiveManager {
      * @param FileSystemManager|null $fs_manager File system manager for sudo operations
      */
     public function __construct(?string $password = null, ?FileSystemManager $fs_manager = null) {
-        $this->password = $password;
-        $this->progress_manager = new ProgressManager();
-        $this->fs_manager = $fs_manager;
+        $this->password     = $password;
+        $this->fs_manager   = $fs_manager;
     }
     
     /**
@@ -42,6 +41,7 @@ class ArchiveManager {
         }
         
         $file_size = filesize($rarfile);
+
         if ($file_size === 0) {
             return false;
         }
@@ -74,8 +74,9 @@ class ArchiveManager {
             }
         }
         
-        $output = [];
-        $rar_cmd = 'rar lb -hp' . escapeshellarg($password) . ' ' . escapeshellarg($rarfile);
+        $output     = [];
+        $rar_cmd    = 'rar lb ' . BF_ENCRYPTION_MODE . escapeshellarg($password) . ' ' . escapeshellarg($rarfile);
+
         exec($rar_cmd, $output, $code);
         
         return $code === 0;
@@ -124,11 +125,11 @@ class ArchiveManager {
             return $hashmap; // Can't access encrypted archive without password
         }
         
-        $output = [];
-        $rar_cmd = 'rar lb ' . escapeshellarg($rarfile);
+        $output     = [];
+        $rar_cmd    = 'rar lb ' . escapeshellarg($rarfile);
         
         if ($this->password) {
-            $rar_cmd = 'rar lb -hp' . escapeshellarg($this->password) . ' ' . escapeshellarg($rarfile);
+            $rar_cmd = 'rar lb ' . BF_ENCRYPTION_MODE . escapeshellarg($this->password) . ' ' . escapeshellarg($rarfile);
         }
         
         exec($rar_cmd, $output, $code);
@@ -136,14 +137,14 @@ class ArchiveManager {
         if ($code !== 0) {
             return $hashmap;
         }
-        
+
         foreach ($output as $line) {
             if (strpos($line, 'files/') === 0) {
                 $hash = basename($line);
                 $hashmap[$hash] = true;
             }
         }
-        
+
         return $hashmap;
     }
     
@@ -160,11 +161,11 @@ class ArchiveManager {
             return $next_id; // Can't access encrypted archive without password
         }
         
-        $output = [];
-        $rar_cmd = 'rar lb ' . escapeshellarg($rarfile);
+        $output     = [];
+        $rar_cmd    = 'rar lb ' . escapeshellarg($rarfile);
         
         if ($this->password) {
-            $rar_cmd = 'rar lb -hp' . escapeshellarg($this->password) . ' ' . escapeshellarg($rarfile);
+            $rar_cmd = 'rar lb ' . BF_ENCRYPTION_MODE . escapeshellarg($this->password) . ' ' . escapeshellarg($rarfile);
         }
         
         exec($rar_cmd, $output, $code);
@@ -172,7 +173,7 @@ class ArchiveManager {
         if ($code !== 0) {
             return $next_id;
         }
-        
+
         foreach ($output as $line) {
             if (preg_match('/^(\d+)-.*\.txt$/', $line, $matches)) {
                 $id = (int)$matches[1];
@@ -181,7 +182,7 @@ class ArchiveManager {
                 }
             }
         }
-        
+
         return $next_id;
     }
     
@@ -197,16 +198,16 @@ class ArchiveManager {
         if (!$this->password && $this->isEncrypted($rarfile)) {
             return $versions; // Can't access encrypted archive without password
         }
-        
-        $output = [];
-        $rar_cmd = 'rar lb ' . escapeshellarg($rarfile) . ' versions/';
-        
+
+        $output     = [];
+        $rar_cmd    = 'rar lb ' . escapeshellarg($rarfile) . ' versions/';
+
         if ($this->password) {
-            $rar_cmd = 'rar lb -hp' . escapeshellarg($this->password) . ' ' . escapeshellarg($rarfile) . ' versions/';
+            $rar_cmd = 'rar lb ' . BF_ENCRYPTION_MODE . escapeshellarg($this->password) . ' ' . escapeshellarg($rarfile) . ' versions/';
         }
-        
+
         exec($rar_cmd, $output, $code);
-        
+
         if ($code !== 0) {
             // If command failed and we have a password, it might be wrong
             if ($this->password && ($code === 10 || $code === 11)) {
@@ -214,34 +215,34 @@ class ArchiveManager {
             }
             return $versions;
         }
-        
+
         foreach ($output as $line) {
             if (preg_match('/^versions\/(\d+)-(\d{4})-(\d{2})-(\d{2}) (\d{2})[-:](\d{2})[-:](\d{2})\.txt$/', $line, $matches)) {
-                $id = (int)$matches[1];
-                $year = (int)$matches[2];
-                $month = (int)$matches[3];
-                $day = (int)$matches[4];
-                $hour = (int)$matches[5];
-                $minute = (int)$matches[6];
-                $second = (int)$matches[7];
+                $id     = (int) $matches[1];
+                $year   = (int) $matches[2];
+                $month  = (int) $matches[3];
+                $day    = (int) $matches[4];
+                $hour   = (int) $matches[5];
+                $minute = (int) $matches[6];
+                $second = (int) $matches[7];
                 
                 $timestamp = mktime($hour, $minute, $second, $month, $day, $year);
                 
                 $versions[] = [
-                    'id' => $id,
-                    'name' => $line,
+                    'id'        => $id,
+                    'name'      => $line,
                     'timestamp' => $timestamp,
-                    'date' => date('Y-m-d H:i:s', $timestamp),
-                    'ts' => date('Y-m-d H:i:s', $timestamp)
+                    'date'      => date('Y-m-d H:i:s', $timestamp),
+                    'ts'        => date('Y-m-d H:i:s', $timestamp)
                 ];
             }
         }
-        
+
         // Sort by ID (newest first)
         usort($versions, function($a, $b) {
             return $b['id'] - $a['id'];
         });
-        
+
         return $versions;
     }
     
@@ -255,21 +256,23 @@ class ArchiveManager {
     public function getCommentFromManifest(string $rarfile, string $manifest_name): string {
         $temp = sys_get_temp_dir() . '/rarrepo_comment_' . uniqid(mt_rand(), true);
         mkdir($temp, 0700, true);
-        
+
         // Extract the manifest file
         $rar_cmd = 'rar e -inul';
+
         if ($this->password) {
-            $rar_cmd .= ' -hp' . escapeshellarg($this->password);
+            $rar_cmd .= ' ' . BF_ENCRYPTION_MODE . escapeshellarg($this->password);
         }
+
         $rar_cmd .= ' ' . escapeshellarg($rarfile) . ' ' . escapeshellarg($manifest_name) . ' ' . escapeshellarg($temp);
-        
+
         exec($rar_cmd, $output, $code);
-        
+
         if ($code !== 0) {
             exec('rm -rf ' . escapeshellarg($temp));
             return "No comment";
         }
-        
+
         $manifest_path = "$temp/" . basename($manifest_name);
         if (!file_exists($manifest_path)) {
             exec('rm -rf ' . escapeshellarg($temp));
@@ -309,13 +312,13 @@ class ArchiveManager {
         } else {
             $ts = date('Y-m-d H:i:s', $latest['timestamp']);
         }
-        
+
         return [
-            'id' => $latest['id'],
-            'name' => $latest['name'],
-            'ts' => $ts,
+            'id'        => $latest['id'],
+            'name'      => $latest['name'],
+            'ts'        => $ts,
             'timestamp' => $latest['timestamp'],
-            'date' => $latest['date']
+            'date'      => $latest['date']
         ];
     }
     
@@ -332,10 +335,10 @@ class ArchiveManager {
         foreach ($versions as $version) {
             if ($version['id'] === $commit_id) {
                 return [
-                    'id' => $version['id'],
-                    'name' => $version['name'],
+                    'id'        => $version['id'],
+                    'name'      => $version['name'],
                     'timestamp' => $version['timestamp'],
-                    'date' => $version['date']
+                    'date'      => $version['date']
                 ];
             }
         }
@@ -355,7 +358,7 @@ class ArchiveManager {
         $rar_cmd = 'rar e ';
         
         if ($this->password) {
-            $rar_cmd .= '-hp' . escapeshellarg($this->password) . ' ';
+            $rar_cmd .= BF_ENCRYPTION_MODE . escapeshellarg($this->password) . ' ';
         }
         
         $rar_cmd .= escapeshellarg($rarfile) . ' ' . escapeshellarg($manifest_name) . ' ' . escapeshellarg($temp_dir);
@@ -385,15 +388,15 @@ class ArchiveManager {
         if (!$this->password && $this->isEncrypted($rarfile)) {
             return false; // Can't repair encrypted archive without password
         }
-        
+
         $rar_cmd = 'rar r ' . escapeshellarg($rarfile);
-        
+
         if ($this->password) {
-            $rar_cmd = 'rar r -hp' . escapeshellarg($this->password) . ' ' . escapeshellarg($rarfile);
+            $rar_cmd = 'rar r ' . BF_ENCRYPTION_MODE . escapeshellarg($this->password) . ' ' . escapeshellarg($rarfile);
         }
-        
+
         exec($rar_cmd, $output, $code);
-        
+
         return $code === 0;
     }
 }

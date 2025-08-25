@@ -72,21 +72,21 @@ class DisplayManager {
      * @return void
      */
     public function header(string $text, string $char = '=', int $width = 60): void {
-        $text_length = strlen($text) + 4; // '  ' before and after
-        $line_length = max($width, $text_length);
-        $line = str_repeat($char, $line_length);
-        
+        $text_length    = strlen($text) + 4; // '  ' before and after
+        $line_length    = max($width, $text_length);
+        $line           = str_repeat($char, $line_length);
+
         // Center the text within $line_length
-        $padding = $line_length - strlen($text);
-        $left = floor($padding / 2);
-        $right = $padding - $left;
-        $centered_text = str_repeat(' ', $left - 1) . $text . str_repeat(' ', $right - 1);
-        
+        $padding        = $line_length - strlen($text);
+        $left           = floor($padding / 2);
+        $right          = $padding - $left;
+        $centered_text  = str_repeat(' ', $left - 1) . $text . str_repeat(' ', $right - 1);
+
         echo "\n" . $this->colorize($line, self::COLOR_CYAN) . "\n";
         echo $this->colorize($centered_text, self::COLOR_BOLD . self::COLOR_CYAN) . "\n";
         echo $this->colorize($line, self::COLOR_CYAN) . "\n\n";
     }
-    
+
     /**
      * Print a success message
      * 
@@ -137,10 +137,12 @@ class DisplayManager {
      */
     public function tableRow(array $columns, array $widths, string $separator = '  '): void {
         $row = '';
+
         foreach ($columns as $i => $column) {
-            $width = $widths[$i] ?? 20;
-            $row .= str_pad($column, $width) . $separator;
+            $width  = $widths[$i] ?? 20;
+            $row    .= str_pad($column, $width) . $separator;
         }
+
         echo $row . "\n";
     }
     
@@ -156,13 +158,14 @@ class DisplayManager {
         if (!isset($manifest['id']) || !isset($manifest['ts'])) {
             return "Unknown Commit";
         }
-        
+
         // Parse the timestamp (format: YYYY-MM-DD HH:MM:SS)
         $timestamp = strtotime($manifest['ts']);
+
         if ($timestamp === false) {
             return "Commit {$manifest['id']} ({$manifest['ts']})";
         }
-        
+
         // Format as mm/dd/yyyy hh:ii:ss AM/PM
         return "Commit " . $manifest['id'] . " " . date('m/d/Y h:i:s A', $timestamp);
     }

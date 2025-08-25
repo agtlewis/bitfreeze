@@ -44,6 +44,33 @@ case "$1" in
         echo "🎉 Release completed successfully!"
         ;;
     
+    "install")
+        echo "📦 Installing BitFreeze to /home/net/bin/..."
+        
+        # Check if compiled version exists
+        if [ ! -f "bitfreeze.php" ]; then
+            echo "❌ Error: bitfreeze.php not found! Please compile first using '$0 compile'"
+            exit 1
+        fi
+        
+        # Check if destination directory exists
+        if [ ! -d "/home/net/bin" ]; then
+            echo "❌ Error: Destination directory /home/net/bin does not exist!"
+            exit 1
+        fi
+        
+        # Copy file and preserve executable permissions
+        if cp bitfreeze.php /home/net/bin/bitfreeze.php; then
+            # Ensure the destination file is executable
+            chmod +x /home/net/bin/bitfreeze.php
+            echo "✅ BitFreeze installed successfully to /home/net/bin/bitfreeze.php"
+            echo "   File is executable and ready to use"
+        else
+            echo "❌ Error: Failed to copy bitfreeze.php to /home/net/bin/"
+            exit 1
+        fi
+        ;;
+    
     "clean")
         echo "🧹 Cleaning up test environments and backups..."
         rm -rf tests/test_environment/
@@ -62,6 +89,7 @@ case "$1" in
         echo "  test-compiled Run tests on compiled version" 
         echo "  compile       Compile dev version to production"
         echo "  release       Full release process (test + compile)"
+        echo "  install       Install compiled version to /home/net/bin/"
         echo "  clean         Clean up temporary files"
         echo "  help          Show this help message"
         echo ""
@@ -81,13 +109,14 @@ case "$1" in
         echo "  2. Test compiled version"
         echo "  3. Compile to production"
         echo "  4. Full release process"
-        echo "  5. Clean up temporary files"
-        echo "  6. Show help"
+        echo "  5. Install to /home/net/bin/"
+        echo "  6. Clean up temporary files"
+        echo "  7. Show help"
         echo "  0. Exit"
         echo ""
         
         while true; do
-            read -p "Enter your choice (0-6): " choice
+            read -p "Enter your choice (0-7): " choice
             case $choice in
                 1)
                     echo ""
@@ -115,11 +144,17 @@ case "$1" in
                     ;;
                 5)
                     echo ""
+                    echo "📦 Installing BitFreeze to /home/net/bin/..."
+                    $0 install
+                    break
+                    ;;
+                6)
+                    echo ""
                     echo "🧹 Cleaning up temporary files..."
                     $0 clean
                     break
                     ;;
-                6)
+                7)
                     echo ""
                     $0 help
                     break
@@ -129,7 +164,7 @@ case "$1" in
                     exit 0
                     ;;
                 *)
-                    echo "❌ Invalid choice. Please enter a number between 0 and 6."
+                    echo "❌ Invalid choice. Please enter a number between 0 and 7."
                     ;;
             esac
         done

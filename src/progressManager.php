@@ -52,14 +52,18 @@ class ProgressManager {
      */
     public function executeRarWithProgress(string $rar_cmd, int $total_files): bool {
         // Start progress display
-        $encryption_status = strpos($rar_cmd, ' -hp') !== false ? "encrypted " : "";
+        $encryption_status = strpos($rar_cmd, ' ' . BF_ENCRYPTION_MODE) !== false ? 'encrypted ' : '';
         echo $this->display->colorize("📦 Saving {$encryption_status}data to repository...", DisplayManager::COLOR_CYAN) . "\n";
-        
+
         // Execute RAR command and monitor output for progress
-        $start_time     = microtime(true);
         $output_lines   = 0;
         $expected_lines = $total_files + 20;
-        
+
+        // DEBUG: Show the actual RAR command being executed
+        debug_echo("DEBUG: Executing RAR command: " . $rar_cmd . "\n");
+        debug_echo("DEBUG: Expected files: " . $total_files . "\n");
+        debug_echo("DEBUG: Starting RAR process...\n");
+
         // Start the RAR process
         $descriptors = [
             0 => ['pipe', 'r'],
@@ -67,7 +71,7 @@ class ProgressManager {
             2 => ['pipe', 'w']
         ];
 
-        debug_echo("\r\033[K" . "⚠️  DEBUG: Executing RAR command: ". $rar_cmd . "\n");
+        debug_echo("\r\033[K" . "⚠️ DEBUG: Executing RAR command: ". $rar_cmd . "\n");
 
         $process = proc_open($rar_cmd, $descriptors, $pipes);
 
@@ -111,6 +115,7 @@ class ProgressManager {
 
                 if ($output !== false) {
                     $output_buffer .= $output;
+                    
                     // Now count lines (handle multiple lines at once)
                     $lines = explode("\n", $output_buffer);
                     // Leave the last partial line in buffer
@@ -143,6 +148,12 @@ class ProgressManager {
         // Get return code
         $return_code = proc_close($process);
 
+        // DEBUG: Show final output and return code
+        debug_echo("DEBUG: Final output buffer:\n");
+        debug_echo("DEBUG: " . $output_buffer . "\n");
+        debug_echo("DEBUG: Return code: " . $return_code . "\n");
+        debug_echo("DEBUG: Total output lines processed: " . $output_lines . "\n");
+
         // Show completion
         echo "\r" . $this->createProgressBar(100, 100, $this->progress_bar_width, false) . "\n";
 
@@ -158,29 +169,29 @@ class ProgressManager {
      */
     public function executeRarExtractWithProgress(string $rar_cmd, int $total_files): bool {
         // Start progress display
-        $encryption_status = strpos($rar_cmd, ' -hp') !== false ? "encrypted " : "";
-        
+        $encryption_status = strpos($rar_cmd, ' ' . BF_ENCRYPTION_MODE) !== false ? "encrypted " : "";
+
         // Execute RAR command and monitor output for progress
         $start_time         = microtime(true);
         $extracted_files    = 0;
         $expected_files     = $total_files;
-        
+
         // Start the RAR process
         $descriptors = [
             0 => ['pipe', 'r'],
             1 => ['pipe', 'w'],
             2 => ['pipe', 'w']
         ];
-        
+
         $process = proc_open($rar_cmd, $descriptors, $pipes);
-        
+
         if (!is_resource($process)) {
             return false;
         }
-        
+
         // Close input pipe
         fclose($pipes[0]);
-        
+
         // Set pipes to non-blocking mode
         stream_set_blocking($pipes[1], false);
         stream_set_blocking($pipes[2], false);
