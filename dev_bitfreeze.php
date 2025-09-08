@@ -325,6 +325,14 @@ if (basename(__FILE__) === basename($_SERVER['SCRIPT_NAME'] ?? '')) {
             $cleaned = $args->getCleanedFromZero();
             $system_manager = new SystemManager();
             
+            // Check if we have enough arguments
+            if (count($cleaned) < 2) {
+                echo "ERROR: Archive path required for list command.\n";
+                $command_manager = new CommandManager();
+                $command_manager->showUsage();
+                exit(1);
+            }
+            
             // Convert archive path to absolute and validate
             $archive = $system_manager->getAbsolutePath($cleaned[1]);
             
@@ -345,25 +353,49 @@ if (basename(__FILE__) === basename($_SERVER['SCRIPT_NAME'] ?? '')) {
                 return;
             }
             
-            // Use reference.php format for list display
-            echo "Available Commits (most recent first):\n";
-            echo "ID    Date/Time           Comment\n";
-            echo "----------------------------------------\n";
+            // Use header format for list display
+            $display_manager = new DisplayManager();
+            $display_manager->header("AVAILABLE COMMITS");
             
+            // Create table data
+            $table_data = [];
             foreach ($versions as $v) {
                 $comment = $archive_manager->getCommentFromManifest($archive, $v['name']);
-                $comment_display = strlen($comment) > 40 ? substr($comment, 0, 37) . '...' : $comment;
-                echo str_pad($v['id'], 4) . "  " . str_pad($v['ts'], 19) . "  $comment_display\n";
+                $table_data[] = [
+                    'ID' => $v['id'],
+                    'Date/Time' => $v['ts'],
+                    'Comment' => $comment
+                ];
+            }
+            
+            // Calculate column widths to match header width (60 characters)
+            $header_width = 60;
+            $id_width = 8;
+            $date_width = 20;
+            $comment_width = $header_width - $id_width - $date_width - 4; // 4 for separators
+            
+            $widths = [$id_width, $date_width, $comment_width];
+            
+            // Print table header
+            echo str_pad('ID', $id_width) . '  ' . str_pad('Date/Time', $date_width) . '  ' . str_pad('Comment', $comment_width) . "\n";
+            echo str_repeat('-', $header_width) . "\n";
+            
+            // Print table rows
+            foreach ($table_data as $row) {
+                $comment_display = strlen($row['Comment']) > $comment_width ? substr($row['Comment'], 0, $comment_width - 3) . '...' : $row['Comment'];
+                echo str_pad($row['ID'], $id_width) . '  ' . str_pad($row['Date/Time'], $date_width) . '  ' . str_pad($comment_display, $comment_width) . "\n";
             }
             break;
         case 'checkout':
-            if ($args->getCount() < 4 || $args->getCount() > 5) {
+            if ($args->getCount() < 4 || $args->getCount() > 6) {
                 $command_manager = new CommandManager();
                 $command_manager->showUsage();
+                exit(1);
             }
 
             $cleaned = $args->getCleanedFromZero();
             $system_manager = new SystemManager();
+            
             
             // Convert all paths to absolute paths early and validate
             $commit_id = $cleaned[1];
@@ -389,9 +421,10 @@ if (basename(__FILE__) === basename($_SERVER['SCRIPT_NAME'] ?? '')) {
             $command_manager->checkout($commit_id, $repository, $outdir, $password);
             break;
         case 'diff':
-            if ($args->getCount() !== 5) {
+            if ($args->getCount() < 5 || $args->getCount() > 7) {
                 $command_manager = new CommandManager();
                 $command_manager->showUsage();
+                exit(1);
             }
 
             $cleaned = $args->getCleanedFromZero();
@@ -417,6 +450,7 @@ if (basename(__FILE__) === basename($_SERVER['SCRIPT_NAME'] ?? '')) {
             if ($args->getCount() < 3 || $args->getCount() > 5) {
                 $command_manager = new CommandManager();
                 $command_manager->showUsage();
+                exit(1);
             }
             $cleaned = $args->getCleanedFromZero();
             $system_manager = new SystemManager();
@@ -449,6 +483,7 @@ if (basename(__FILE__) === basename($_SERVER['SCRIPT_NAME'] ?? '')) {
             if ($args->getCount() < 2 || $args->getCount() > 4) {
                 $command_manager = new CommandManager();
                 $command_manager->showUsage();
+                exit(1);
             }
             $cleaned = $args->getCleanedFromZero();
             $system_manager = new SystemManager();

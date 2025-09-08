@@ -1238,10 +1238,13 @@ class FileSystemManager {
      */
     private function getPartitionSize(string $device): int {
         $output = [];
+
         exec("lsblk -b -n -o SIZE $device 2>/dev/null", $output);
+
         if (!empty($output[0])) {
             return (int)trim($output[0]);
         }
+
         return 0;
     }
     
@@ -1256,12 +1259,16 @@ class FileSystemManager {
         $free   = disk_free_space($mount_point);
 
         if ($total === false || $free === false) {
-            return ['used' => 0, 'free' => 0, 'usage_percent' => 0];
+            return [
+                'used'              => 0,
+                'free'              => 0,
+                 'usage_percent'    => 0
+            ];
         }
 
         $used           = $total - $free;
         $usage_percent  = $total > 0 ? round(($used / $total) * 100, 1) : 0;
-        
+
         return [
             'used'          => $used,
             'free'          => $free,
@@ -1329,22 +1336,23 @@ class FileSystemManager {
      * @return string Description
      */
     private function getPartitionDescription(string $mount_point, string $filesystem): string {
-        if ($mount_point === '/') {
-            return 'Root filesystem';
-        } elseif ($mount_point === '/home') {
-            return 'User home directories';
-        } elseif ($mount_point === '/var') {
-            return 'Variable data (logs, packages)';
-        } elseif ($mount_point === '/boot') {
-            return 'Boot files and kernels';
-        } elseif ($mount_point === '/etc') {
-            return 'System configuration';
-        } elseif (strpos($mount_point, '/media/') === 0) {
-            return 'External media';
-        } elseif (strpos($mount_point, '/mnt/') === 0) {
-            return 'Mounted filesystem';
-        } else {
-            return ucfirst($filesystem) . ' filesystem';
+        switch (true) {
+            case $mount_point === '/':
+                return 'Root filesystem';
+            case $mount_point === '/home':
+                return 'User home directories';
+            case $mount_point === '/var':
+                return 'Variable data (logs, packages)';
+            case $mount_point === '/boot':
+                return 'Boot files and kernels';
+            case $mount_point === '/etc':
+                return 'System configuration';
+            case strpos($mount_point, '/media/') === 0:
+                return 'External media';
+            case strpos($mount_point, '/mnt/') === 0:
+                return 'Mounted filesystem';
+            default:
+                return ucfirst($filesystem) . ' filesystem';
         }
     }
     
@@ -1503,103 +1511,6 @@ class FileSystemManager {
     }
 
     /**
-     * Check if a path is on an unselected partition and should be skipped
-     * 
-     * @param string $path Path to check
-     * @param int $reference_device_id Reference device ID of the starting partition
-     * @param array $selected_partitions Array of selected partition info
-     * @return bool True if path should be skipped (unselected partition), false if should proceed
-     */
-    private function shouldSkipUnselectedPartition(string $path, int $reference_device_id, array $selected_partitions): bool {
-        $stat       = @stat($path);
-        $device_id  = null;
-
-        if ($stat === false) {  // If we can't stat the path, try with sudo
-            if ($this->sudo_password !== null && $this->can_elevate) {
-                $escaped_path   = escapeshellarg($path);
-                $command        = "stat -c '%d' $escaped_path"; // %d gives device ID in decimal
-                $output         = [];
-
-                exec("printf '%s\n' " . escapeshellarg($this->sudo_password) . " | sudo -p '' -S $command 2>/dev/null", $output, $code);
-
-                if ($code === 0 && !empty($output[0])) {
-                    $device_id = (int)trim($output[0]);
-                }
-            }
-
-            if ($device_id === null) {  // If we can't determine device ID, assume unselected partition for safety
-                debug_echo("\r\033[K" . "⚠️ DEBUG: Cannot determine device ID for: $path (assuming unselected partition)\n");
-                return true;
-            }
-        } else {
-            $device_id = $stat['dev'];
-        }
-
-        if ($device_id === $reference_device_id) {  // If it's the same device as the starting partition, allow it
-            return false;
-        }
-
-        // Check if this device ID matches any of the selected partitions
-        $mount_point = $this->getPartitionMountPointForPath($path);
-
-        foreach ($selected_partitions as $partition) {
-            if ($partition['mount_point'] === $mount_point) {
-                //debug_echo("\r\033[K" . "✅ DEBUG: Allowing selected partition: $path (mount: $mount_point)\n");
-                return false; // This partition is selected, don't skip
-            }
-        }
-        
-        // This partition is not selected, skip it
-        $this->logPartitionBoundary($path, $device_id, $reference_device_id, $mount_point, false);
-        return true;
-    }
-    
-    /**
-     * Get the mount point for a given path
-     * 
-     * @param string $path Path to check
-     * @return string Mount point path
-     */
-    private function getPartitionMountPointForPath(string $path): string {
-        $escaped_path   = escapeshellarg($path);  // Use df command to get mount point for the path
-        $output         = [];
-
-        exec("df --output=target $escaped_path 2>/dev/null | tail -n 1", $output);
-        
-        if (!empty($output[0])) {
-            return trim($output[0]);
-        }
-        
-        $current_path = realpath($path);  // Fallback: try to determine mount point by walking up the directory tree
-
-        if ($current_path === false) {
-            return '/'; // Default fallback
-        }
-        
-        $path_stat = @stat($current_path);
-
-        if ($path_stat === false) {
-            return '/'; // Default fallback
-        }
-
-        $current_device = $path_stat['dev'];
-        
-        // Walk up the directory tree until device changes
-        while ($current_path !== '/' && $current_path !== '') {
-            $parent_path = dirname($current_path);
-            $parent_stat = @stat($parent_path);
-
-            if ($parent_stat && $parent_stat['dev'] !== $current_device) {
-                return $current_path;  // Device changed, current_path is the mount point
-            }
-
-            $current_path = $parent_path;
-        }
-
-        return '/'; // Root filesystem
-    }
-    
-    /**
      * Get available disk space for a directory
      * 
      * @param string $directory Directory path to check
@@ -1634,7 +1545,10 @@ class FileSystemManager {
         exec("sudo blockdev --getsize64 $escaped_device 2>/dev/null", $output, $code);
 
         if ($code !== 0 || empty($output[0])) {
-            return ['raw_size' => 0, 'estimated_compressed' => 0];
+            return [
+                'raw_size'              => 0,
+                'estimated_compressed'  => 0
+            ];
         }
 
         $raw_size = (int)trim($output[0]);
@@ -1756,66 +1670,72 @@ class FileSystemManager {
         try {
             // Step 1: Create raw image using dd
             $dd_result = $this->createRawImage($device_path, $temp_image, $progress_callback);
+
             if (!$dd_result['success']) {
                 @unlink($temp_image);
                 return ['success' => false, 'error' => 'DD operation failed: ' . $dd_result['error']];
             }
-            
+
             // Step 2: Calculate hash of raw image
             if ($progress_callback) {
                 $progress_callback('Calculating image hash...', 90);
             }
-            
+
             $hash = $this->getFileMd5($temp_image);
+
             if ($hash === false) {
                 @unlink($temp_image);
                 return ['success' => false, 'error' => 'Failed to calculate image hash'];
             }
-            
+
             // Step 3: Move to final location with MD5 name
             $final_path = $output_dir . '/' . $hash;
-            
+
             // Check if image with this hash already exists (deduplication)
             if (file_exists($final_path)) {
                 @unlink($temp_image);
+
                 if ($progress_callback) {
                     $progress_callback('Image already exists (deduplicated)', 100);
                 }
                 
                 return [
-                    'success' => true,
-                    'hash' => $hash,
-                    'size' => filesize($final_path),
-                    'metadata' => $metadata,
-                    'deduplicated' => true
+                    'success'       => true,
+                    'hash'          => $hash,
+                    'size'          => filesize($final_path),
+                    'metadata'      => $metadata,
+                    'deduplicated'  => true
                 ];
             }
-            
+
             // Rename temp image to final MD5-based name
             if (!rename($temp_image, $final_path)) {
                 @unlink($temp_image);
-                return ['success' => false, 'error' => 'Failed to rename image to MD5 filename'];
+
+                return [
+                    'success'   => false,
+                    'error'     => 'Failed to rename image to MD5 filename'
+                ];
             }
-            
+
             if ($progress_callback) {
                 $progress_callback('Image creation complete', 100);
             }
-            
+
             return [
-                'success' => true,
-                'hash' => $hash,
-                'size' => filesize($final_path),
-                'metadata' => $metadata,
-                'deduplicated' => false
+                'success'       => true,
+                'hash'          => $hash,
+                'size'          => filesize($final_path),
+                'metadata'      => $metadata,
+                'deduplicated'  => false
             ];
-            
         } catch (Exception $e) {
             // Clean up on error
             @unlink($temp_image);
             return ['success' => false, 'error' => 'Exception: ' . $e->getMessage()];
         }
     }
-    
+
     /**
      * Create raw partition image using dd
      * 
@@ -1827,38 +1747,40 @@ class FileSystemManager {
     private function createRawImage(string $device_path, string $output_path, ?callable $progress_callback = null): array {
         $escaped_device = escapeshellarg($device_path);
         $escaped_output = escapeshellarg($output_path);
-        
+
         // Use dd with status=progress for monitoring
         $dd_cmd = "sudo dd if=$escaped_device of=$escaped_output bs=1M status=progress 2>&1";
-        
+
         // Execute dd with progress monitoring
         $process = popen($dd_cmd, 'r');
+
         if (!$process) {
             return ['success' => false, 'error' => 'Failed to start dd process'];
         }
-        
-        $output_lines = [];
-        $last_progress = 0;
-        
+
+        $output_lines   = [];
+        $last_progress  = 0;
+
         while (!feof($process)) {
             $line = fgets($process);
+
             if ($line !== false) {
                 $output_lines[] = trim($line);
                 
                 // Parse dd progress output
                 if ($progress_callback && preg_match('/(\d+) bytes.* copied/i', $line, $matches)) {
                     $bytes_copied = (int)$matches[1];
-                    // Estimate progress (we don't know total size during dd)
-                    // Use time-based estimation instead
+                    // Estimate progress (we don't know total size during dd), use time-based estimation instead
                     $current_time = time();
+
                     if (!isset($start_time)) {
                         $start_time = $current_time;
                     }
-                    
+
                     // Progress estimation based on time (rough)
-                    $elapsed = $current_time - $start_time;
-                    $progress = min(85, $elapsed * 3); // Assume max 85% for dd phase (no compression)
-                    
+                    $elapsed    = $current_time - $start_time;
+                    $progress   = min(85, $elapsed * 3); // Assume max 85% for dd phase (no compression)
+
                     if ($progress > $last_progress + 5) { // Update every 5%
                         $progress_callback("Creating raw image: " . $this->formatBytes($bytes_copied) . " copied", $progress);
                         $last_progress = $progress;
@@ -1866,22 +1788,28 @@ class FileSystemManager {
                 }
             }
         }
-        
-        $exit_code = pclose($process);
-        
-        if ($exit_code !== 0) {
-            return ['success' => false, 'error' => 'DD failed with exit code ' . $exit_code . ': ' . implode("\n", $output_lines)];
-        }
-        
-        if (!file_exists($output_path)) {
-            return ['success' => false, 'error' => 'DD completed but output file not found'];
-        }
-        
-        return ['success' => true];
-    }
-    
 
-    
+        $exit_code = pclose($process);
+
+        if ($exit_code !== 0) {
+            return [
+                'success'   => false,
+                'error'     => 'DD failed with exit code ' . $exit_code . ': ' . implode("\n", $output_lines)
+            ];
+        }
+
+        if (!file_exists($output_path)) {
+            return [
+                'success'   => false,
+                'error'     => 'DD completed but output file not found'
+            ];
+        }
+
+        return [
+            'success' => true
+        ];
+    }
+
     /**
      * Collect partition metadata for restore purposes
      * 
@@ -1892,45 +1820,55 @@ class FileSystemManager {
     private function collectPartitionMetadata(string $device_path, string $mount_point): array {
         $metadata = [
             'source_device' => $device_path,
-            'source_mount' => $mount_point,
+            'source_mount'  => $mount_point,
             'creation_time' => time()
         ];
-        
+
         // Get filesystem type
         $escaped_device = escapeshellarg($device_path);
-        $output = [];
+        $output         = [];
+
         exec("blkid -s TYPE -o value $escaped_device 2>/dev/null", $output);
+
         if (!empty($output[0])) {
             $metadata['filesystem'] = trim($output[0]);
         }
-        
+
         // Get UUID
-        $output = [];
+        $output         = [];
+
         exec("blkid -s UUID -o value $escaped_device 2>/dev/null", $output);
+
         if (!empty($output[0])) {
             $metadata['uuid'] = trim($output[0]);
         }
-        
+
         // Get label
-        $output = [];
+        $output         = [];
+
         exec("blkid -s LABEL -o value $escaped_device 2>/dev/null", $output);
+
         if (!empty($output[0])) {
             $metadata['label'] = trim($output[0]);
         }
-        
+
         // Get block size and total blocks
-        $output = [];
+        $output         = [];
+
         exec("sudo blockdev --getbsz $escaped_device 2>/dev/null", $output);
+
         if (!empty($output[0])) {
             $metadata['block_size'] = (int)trim($output[0]);
         }
-        
-        $output = [];
+
+        $output         = [];
+
         exec("sudo blockdev --getsize $escaped_device 2>/dev/null", $output);
+
         if (!empty($output[0])) {
             $metadata['total_blocks'] = (int)trim($output[0]);
         }
-        
+
         return $metadata;
     }
     
@@ -1943,16 +1881,17 @@ class FileSystemManager {
      */
     public function createImagesMetadata(array $image_info, string $output_path): bool {
         $metadata = [
-            'created_time' => time(),
-            'format_version' => '1.0',
-            'images' => $image_info
+            'created_time'      => time(),
+            'format_version'    => '1.0',
+            'images'            => $image_info
         ];
-        
+
         $json = json_encode($metadata, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+
         if ($json === false) {
             return false;
         }
-        
+
         return $this->writeFileContents($output_path, $json) !== false;
     }
     
@@ -1965,22 +1904,26 @@ class FileSystemManager {
      * @return array Result with 'success', 'images_info', 'errors'
      */
     public function processPartitionImages(array $selected_partitions, string $temp_images_dir, ?callable $progress_callback = null): array {
-        $images_info = [];
-        $errors = [];
-        $total_images = 0;
-        $processed_images = 0;
-        
+        $images_info        = [];
+        $errors             = [];
+        $total_images       = 0;
+        $processed_images   = 0;
+
         // Count total images to process
         foreach ($selected_partitions as $partition) {
             if ($partition['should_image']) {
                 $total_images++;
             }
         }
-        
+
         if ($total_images === 0) {
-            return ['success' => true, 'images_info' => [], 'errors' => []];
+            return [
+                'success'       => true,
+                'images_info'   => [],
+                'errors'        => []
+            ];
         }
-        
+
         // Create images directory
         if (!is_dir($temp_images_dir)) {
             mkdir($temp_images_dir, 0755, true);
@@ -1990,55 +1933,54 @@ class FileSystemManager {
             if (!$partition['should_image']) {
                 continue;
             }
-            
-            $processed_images++;
-            $mount_point = $partition['mount_point'];
-            $device_path = $this->getDeviceFromMountPoint($mount_point);
-            
+
+            $processed_images   = $processed_images + 1;
+            $mount_point        = $partition['mount_point'];
+            $device_path        = $this->getDeviceFromMountPoint($mount_point);
+
             if (!$device_path) {
                 $errors[] = "Could not determine device for mount point: $mount_point";
                 continue;
             }
-            
+
             // Progress callback for this image
             $image_progress_callback = null;
+
             if ($progress_callback) {
                 $image_progress_callback = function($message, $percent) use ($progress_callback, $processed_images, $total_images) {
                     $overall_percent = (($processed_images - 1) / $total_images) * 100 + ($percent / $total_images);
                     $progress_callback("Image $processed_images/$total_images: $message", $overall_percent);
                 };
             }
-            
+
             // Create the image (MD5-named, stored in temp_images_dir)
             $result = $this->createPartitionImage($device_path, $temp_images_dir, $mount_point, $image_progress_callback);
-            
+
             if ($result['success']) {
                 $images_info[] = [
                     'source_device' => $device_path,
-                    'source_mount' => $mount_point,
-                    'filesystem' => $result['metadata']['filesystem'] ?? 'unknown',
-                    'image_size' => $result['size'],
-                    'image_hash' => $result['hash'],  // MD5 hash - used as filename in images/ directory
+                    'source_mount'  => $mount_point,
+                    'filesystem'    => $result['metadata']['filesystem'] ?? 'unknown',
+                    'image_size'    => $result['size'],
+                    'image_hash'    => $result['hash'],  // MD5 hash - used as filename in images/ directory
                     'creation_time' => $result['metadata']['creation_time'],
-                    'restore_info' => $result['metadata'],
-                    'deduplicated' => $result['deduplicated'] ?? false
+                    'restore_info'  => $result['metadata'],
+                    'deduplicated'  => $result['deduplicated'] ?? false
                 ];
             } else {
                 $errors[] = "Failed to create image for $mount_point: " . $result['error'];
             }
         }
-        
+
         $success = empty($errors) || count($images_info) > 0; // Success if we got at least one image
-        
+
         return [
-            'success' => $success,
-            'images_info' => $images_info,
-            'errors' => $errors
+            'success'       => $success,
+            'images_info'   => $images_info,
+            'errors'        => $errors
         ];
     }
-    
 
-    
     /**
      * Format bytes into human readable format
      * 
@@ -2049,24 +1991,6 @@ class FileSystemManager {
         $units = ['B', 'KB', 'MB', 'GB', 'TB'];
         $factor = floor((strlen($bytes) - 1) / 3);
         return sprintf("%.2f %s", $bytes / pow(1024, $factor), $units[$factor]);
-    }
-    
-    /**
-     * Log partition boundary detection for debugging
-     * 
-     * @param string $path Path being checked
-     * @param int $current_device Device ID of current path
-     * @param int $reference_device Reference device ID
-     * @param string $mount_point Mount point of the path
-     * @param bool $is_selected Whether this partition is selected for backup
-     */
-    private function logPartitionBoundary(string $path, int $current_device, int $reference_device, string $mount_point = '', bool $is_selected = false): void {
-        debug_echo("\r\033[K" . "🔍 DEBUG: Partition boundary detected:\n");
-        debug_echo("  Path: $path\n");
-        debug_echo("  Current device: $current_device\n");
-        debug_echo("  Reference device: $reference_device\n");
-        debug_echo("  Mount point: $mount_point\n");
-        debug_echo("  Selected for backup: " . ($is_selected ? 'Yes' : 'No') . "\n");
     }
 
 }

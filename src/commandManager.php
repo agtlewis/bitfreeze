@@ -6,6 +6,8 @@
  * checkout, diff, list, and repair operations. This class orchestrates the
  * interaction between other manager classes to execute user commands.
  */
+
+
 class CommandManager {
     private $display;
     private $fs_manager;
@@ -235,10 +237,22 @@ class CommandManager {
 
         echo "\r\033[K" . $this->display->colorize("  📁 Processed " . number_format($file_count) . " files...", DisplayManager::COLOR_CYAN);
         
-        // Record parent directories in manifest
-        foreach ($parent_dirs as $dir => $dummy) {
-            $full_dir_path  = $folder . '/' . $dir;
-            $manifest[]     = $fs_manager->createDirectoryEntry($dir, $full_dir_path);
+        // Second pass: capture ALL directories with their metadata (including empty ones)
+        $all_dirs = [];
+        
+        foreach ($fs_manager->scanDirGeneratorForDirs($folder) as $dirpath) {
+            $rel = ltrim(substr($dirpath, strlen($folder)), '/');
+            
+            if ($rel === '') {
+                continue; // skip root
+            }
+            
+            $all_dirs[] = $rel;
+        }
+        
+        foreach ($all_dirs as $dir) {
+            $fullpath = $folder . '/' . $dir;
+            $manifest[] = $fs_manager->createDirectoryEntry($dir, $fullpath);
         }
 
         // Sort manifest by path for consistent ordering
@@ -306,6 +320,7 @@ class CommandManager {
         // Execute single RAR command for all items
         $rar_cmd = $this->generateRarArchiveCommand($rarfile, implode(" ", array_map('escapeshellarg', $items_to_add)), $password, $args->getFlag('--low-priority'));
         
+        $this->display->header("WRITING DATA");
         echo "\n📦 Committing changes to the repository...\n";
         $this->progress_manager->executeRarWithProgress($rar_cmd, $total_items);
         
@@ -321,39 +336,197 @@ class CommandManager {
         $size_diff          = $archive_size_after - $archive_size_before;
         
         echo "\n";
-        $this->display->success("✅ Commit completed successfully!");
-        $this->display->info("📊 Statistics:");
+        $this->display->success("✅ Scan complete!");
         
-        // Display statistics in table format
-        $stats_data = [
-            ['📁 Total files processed', number_format($file_count)],
-            ['➕ New files added', number_format($add_count)],
-            ['🔄 Files already in archive', number_format($already_count)],
-            ['🔗 Symlinks processed', number_format($symlink_count)],
-            ['⏭️ Files skipped', number_format($skipped_count)],
-            ['💾 Total size processed', $this->formatFileSizeInline($total_size)],
-            ['📦 Archive size change', $this->formatFileSizeInline($size_diff)],
-            ['⏱️ Duration', $this->formatDurationInline($duration)],
-            ['🆔 Commit ID', $next_id],
-            ['📝 Comment', $comment]
+        // Display scan results in a table
+        $this->display->header("SCAN RESULTS");
+        
+        // Count directories
+        $dir_count = count($parent_dirs);
+        
+        $scan_data = [
+            ['Files Scanned', number_format($file_count)],
+            ['Unique Files to Add', number_format($add_count)],
+            ['Duplicate Files', number_format($already_count)],
+            ['Skipped Files', number_format($skipped_count)],
+            ['Directories Included', number_format($dir_count)],
+            ['Total Size', $this->formatFileSizeInline($total_size)]
         ];
         
-        $widths = [30, 20];
-
-        foreach ($stats_data as $row) {
+        if ($symlink_count > 0) {
+            $symlink_text = $follow_symlinks ? "followed" : "stored as links";
+            $scan_data[] = ['Symbolic Links', number_format($symlink_count) . " ($symlink_text)"];
+        }
+        
+        $widths = [25, 20];
+        foreach ($scan_data as $row) {
             $this->display->tableRow($row, $widths);
         }
         
         if ($skipped_count > 0) {
             echo "\n";
-            $this->display->warning("⚠️ Some files were skipped:");
-
-            foreach ($skipped_files as $file) {
-                echo "  ❌ {$file}: {$skipped_reasons[$file]}\n";
+            $this->display->warning("⚠️  Some files were skipped due to permission issues:");
+            foreach (array_slice($skipped_files, 0, 5) as $skipped_file) {
+                $reason = $skipped_reasons[$skipped_file] ?? "Unknown reason";
+                echo $this->display->colorize("    • $skipped_file ($reason)", $this->display::COLOR_YELLOW) . "\n";
             }
+            if (count($skipped_files) > 5) {
+                echo $this->display->colorize("    ... and " . (count($skipped_files) - 5) . " more", $this->display::COLOR_YELLOW) . "\n";
+            }
+        }
+
+        // Get commit ID for summary (use the actual commit ID that was created)
+        $commit_id = $next_id;
+        $timestamp = date('Y-m-d H:i:s', $timestamp);
+        $manifest_filename = $commit_filename;
+        
+        // Calculate compression statistics
+        $compression_stats = $this->calculateCompressionStats($total_size, $archive_size_after);
+
+        $this->display->header("COMMIT SUMMARY");
+        
+        $summary_data = [
+            ['Commit ID', $commit_id],
+            ['Commit Manifest', $manifest_filename],
+            ['Comment', $comment],
+            ['Time Elapsed', $this->formatDurationInline($duration)],
+            ['Files Scanned', number_format($file_count)],
+            ['Total Size', $this->formatFileSizeInline($total_size)],
+            ['Unique Files Added', number_format($add_count)],
+            ['Duplicate Files', number_format($already_count)],
+            ['Files Skipped', number_format($skipped_count)],
+            ['Directories Recorded', number_format($dir_count)]
+        ];
+        
+        if ($symlink_count > 0) {
+            $symlink_text = $follow_symlinks ? "followed" : "stored as links";
+            $summary_data[] = ['Symbolic Links', number_format($symlink_count) . " ($symlink_text)"];
+        }
+        
+        if ($password) {
+            $summary_data[] = ['Repository Encryption', 'Enabled'];
+        }
+        
+        $widths = [25, 30];
+        foreach ($summary_data as $row) {
+            $this->display->tableRow($row, $widths);
+        }
+        
+        // Display compression statistics
+        $this->display->header("REPOSITORY SIZE & COMPRESSION");
+        
+        $compression_data = [
+            ['Original Size', $compression_stats['original_formatted']],
+            ['Repository Size', $compression_stats['archive_formatted']],
+        ];
+        
+        // Show size difference with appropriate label
+        if ($compression_stats['difference'] >= 0) {
+            $compression_data[] = ['Size Reduction', $compression_stats['difference_formatted']];
+        } else {
+            $compression_data[] = ['Size Increase', $this->formatFileSizeInline(abs($compression_stats['difference']))];
+        }
+        
+        $compression_data[] = ['Compression Ratio', $compression_stats['ratio_formatted']];
+        
+        foreach ($compression_data as $row) {
+            $this->display->tableRow($row, $widths);
         }
         
         echo "\n";
+    }
+    
+    /**
+     * Count files that will be added to the archive
+     * 
+     * @param string $temp_dir Temporary directory containing files to archive
+     * @return int Number of files to be archived
+     */
+    private function countFilesToArchive(string $temp_dir): int {
+        $count = 0;
+        
+        // Count files in files/ directory
+        $files_dir = "$temp_dir/files";
+        if (is_dir($files_dir)) {
+            $count += count(scandir($files_dir)) - 2; // Subtract . and ..
+        }
+        
+        // Count files in versions/ directory
+        $versions_dir = "$temp_dir/versions";
+        if (is_dir($versions_dir)) {
+            $count += count(scandir($versions_dir)) - 2; // Subtract . and ..
+        }
+        
+        // Add bitfreeze.php and README.txt
+        $count += 2;
+        
+        return $count;
+    }
+    
+    /**
+     * Add nice level to RAR command
+     * 
+     * @param string $rar_cmd Base RAR command
+     * @return string RAR command with nice level
+     */
+    private function addNiceToRarCommand(string $rar_cmd): string {
+        $args = new ArgumentHandler();
+        $nice_level = $args->getFlag('--low-priority') ? 10 : 1;
+        return "nice -n $nice_level $rar_cmd";
+    }
+    
+    /**
+     * Calculate compression ratio and size difference
+     * 
+     * @param int $original_size Total size of original files in bytes
+     * @param int $archive_size Size of archive file in bytes
+     * @return array Array with compression statistics
+     */
+    private function calculateCompressionStats(int $original_size, int $archive_size): array {
+        if ($original_size === 0) {
+            return [
+                'ratio'                 => 0,
+                'difference'            => 0,
+                'ratio_formatted'       => '0%',
+                'difference_formatted'  => '0 Bytes',
+                'original_formatted'    => '0 Bytes',
+                'archive_formatted'     => '0 Bytes'
+            ];
+        }
+        
+        // Calculate compression ratio: (original - archive) / original * 100
+        $ratio = (($original_size - $archive_size) / $original_size) * 100;
+        $difference = $original_size - $archive_size;
+        
+        return [
+            'ratio'                 => $ratio,
+            'difference'            => $difference,
+            'ratio_formatted'       => number_format($ratio, 1) . '%',
+            'difference_formatted'  => $this->formatFileSizeInline($difference),
+            'original_formatted'    => $this->formatFileSizeInline($original_size),
+            'archive_formatted'     => $this->formatFileSizeInline($archive_size)
+        ];
+    }
+    
+    /**
+     * Format commit information for display
+     * 
+     * @param array $manifest Manifest array with 'id' and 'ts' keys
+     * @return string Formatted commit information
+     */
+    private function formatCommitDisplay(array $manifest): string {
+        if (!isset($manifest['id']) || !isset($manifest['ts'])) {
+            return "Unknown Commit";
+        }
+        
+        // Parse the timestamp (format: YYYY-MM-DD HH:MM:SS)
+        $timestamp = strtotime($manifest['ts']);
+        if ($timestamp === false) {
+            return "Commit {$manifest['id']} ({$manifest['ts']})";
+        }
+        
+        // Format as mm/dd/yyyy hh:ii:ss AM/PM
+        return "Commit " . $manifest['id'] . " " . date('m/d/Y h:i:s A', $timestamp);
     }
     
     /**
@@ -686,7 +859,9 @@ class CommandManager {
         
         $summary_data[] = ['Total Changes', count($new_files) + count($mod_files) + count($del_files) + ($include_meta ? count($mta_files) : 0) + ($include_checksum ? count($md5_files) : 0)];
         
-        $widths = [20, 10];
+        // Calculate optimal column widths using DisplayManager
+        $widths = $this->display->calculateOptimalColumnWidths($summary_data);
+        
         foreach ($summary_data as $row) {
             $this->display->tableRow($row, $widths);
         }
@@ -976,7 +1151,7 @@ class CommandManager {
             }
         }
 
-        echo "\rFinalizing " . number_format($n+1) . " of " . number_format($count) . " files";
+        echo "\rFinalizing " . number_format($count) . " of " . number_format($count) . " files";
         echo "\n";
 
         // Restore directory metadata after all files are processed
@@ -1851,7 +2026,9 @@ class CommandManager {
             ['💬 Comment', $comment]
         ]);
 
-        $widths = [30, 25];
+        // Calculate optimal column widths using DisplayManager
+        $widths = $this->display->calculateOptimalColumnWidths($backup_stats);
+        
         foreach ($backup_stats as $row) {
             $this->display->tableRow($row, $widths);
         }

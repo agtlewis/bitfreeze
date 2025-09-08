@@ -75,6 +75,8 @@ define('BF_ENCRYPTION_MODE', '-p'); // -hp = Encrypt files & headers, -p = Encry
  * checkout, diff, list, and repair operations. This class orchestrates the
  * interaction between other manager classes to execute user commands.
  */
+
+
 class CommandManager {
     private $display;
     private $fs_manager;
@@ -304,10 +306,22 @@ class CommandManager {
 
         echo "\r\033[K" . $this->display->colorize("  📁 Processed " . number_format($file_count) . " files...", DisplayManager::COLOR_CYAN);
         
-        // Record parent directories in manifest
-        foreach ($parent_dirs as $dir => $dummy) {
-            $full_dir_path  = $folder . '/' . $dir;
-            $manifest[]     = $fs_manager->createDirectoryEntry($dir, $full_dir_path);
+        // Second pass: capture ALL directories with their metadata (including empty ones)
+        $all_dirs = [];
+        
+        foreach ($fs_manager->scanDirGeneratorForDirs($folder) as $dirpath) {
+            $rel = ltrim(substr($dirpath, strlen($folder)), '/');
+            
+            if ($rel === '') {
+                continue; // skip root
+            }
+            
+            $all_dirs[] = $rel;
+        }
+        
+        foreach ($all_dirs as $dir) {
+            $fullpath = $folder . '/' . $dir;
+            $manifest[] = $fs_manager->createDirectoryEntry($dir, $fullpath);
         }
 
         // Sort manifest by path for consistent ordering
@@ -375,6 +389,7 @@ class CommandManager {
         // Execute single RAR command for all items
         $rar_cmd = $this->generateRarArchiveCommand($rarfile, implode(" ", array_map('escapeshellarg', $items_to_add)), $password, $args->getFlag('--low-priority'));
         
+        $this->display->header("WRITING DATA");
         echo "\n📦 Committing changes to the repository...\n";
         $this->progress_manager->executeRarWithProgress($rar_cmd, $total_items);
         
@@ -390,39 +405,197 @@ class CommandManager {
         $size_diff          = $archive_size_after - $archive_size_before;
         
         echo "\n";
-        $this->display->success("✅ Commit completed successfully!");
-        $this->display->info("📊 Statistics:");
+        $this->display->success("✅ Scan complete!");
         
-        // Display statistics in table format
-        $stats_data = [
-            ['📁 Total files processed', number_format($file_count)],
-            ['➕ New files added', number_format($add_count)],
-            ['🔄 Files already in archive', number_format($already_count)],
-            ['🔗 Symlinks processed', number_format($symlink_count)],
-            ['⏭️ Files skipped', number_format($skipped_count)],
-            ['💾 Total size processed', $this->formatFileSizeInline($total_size)],
-            ['📦 Archive size change', $this->formatFileSizeInline($size_diff)],
-            ['⏱️ Duration', $this->formatDurationInline($duration)],
-            ['🆔 Commit ID', $next_id],
-            ['📝 Comment', $comment]
+        // Display scan results in a table
+        $this->display->header("SCAN RESULTS");
+        
+        // Count directories
+        $dir_count = count($parent_dirs);
+        
+        $scan_data = [
+            ['Files Scanned', number_format($file_count)],
+            ['Unique Files to Add', number_format($add_count)],
+            ['Duplicate Files', number_format($already_count)],
+            ['Skipped Files', number_format($skipped_count)],
+            ['Directories Included', number_format($dir_count)],
+            ['Total Size', $this->formatFileSizeInline($total_size)]
         ];
         
-        $widths = [30, 20];
-
-        foreach ($stats_data as $row) {
+        if ($symlink_count > 0) {
+            $symlink_text = $follow_symlinks ? "followed" : "stored as links";
+            $scan_data[] = ['Symbolic Links', number_format($symlink_count) . " ($symlink_text)"];
+        }
+        
+        $widths = [25, 20];
+        foreach ($scan_data as $row) {
             $this->display->tableRow($row, $widths);
         }
         
         if ($skipped_count > 0) {
             echo "\n";
-            $this->display->warning("⚠️ Some files were skipped:");
-
-            foreach ($skipped_files as $file) {
-                echo "  ❌ {$file}: {$skipped_reasons[$file]}\n";
+            $this->display->warning("⚠️  Some files were skipped due to permission issues:");
+            foreach (array_slice($skipped_files, 0, 5) as $skipped_file) {
+                $reason = $skipped_reasons[$skipped_file] ?? "Unknown reason";
+                echo $this->display->colorize("    • $skipped_file ($reason)", $this->display::COLOR_YELLOW) . "\n";
             }
+            if (count($skipped_files) > 5) {
+                echo $this->display->colorize("    ... and " . (count($skipped_files) - 5) . " more", $this->display::COLOR_YELLOW) . "\n";
+            }
+        }
+
+        // Get commit ID for summary (use the actual commit ID that was created)
+        $commit_id = $next_id;
+        $timestamp = date('Y-m-d H:i:s', $timestamp);
+        $manifest_filename = $commit_filename;
+        
+        // Calculate compression statistics
+        $compression_stats = $this->calculateCompressionStats($total_size, $archive_size_after);
+
+        $this->display->header("COMMIT SUMMARY");
+        
+        $summary_data = [
+            ['Commit ID', $commit_id],
+            ['Commit Manifest', $manifest_filename],
+            ['Comment', $comment],
+            ['Time Elapsed', $this->formatDurationInline($duration)],
+            ['Files Scanned', number_format($file_count)],
+            ['Total Size', $this->formatFileSizeInline($total_size)],
+            ['Unique Files Added', number_format($add_count)],
+            ['Duplicate Files', number_format($already_count)],
+            ['Files Skipped', number_format($skipped_count)],
+            ['Directories Recorded', number_format($dir_count)]
+        ];
+        
+        if ($symlink_count > 0) {
+            $symlink_text = $follow_symlinks ? "followed" : "stored as links";
+            $summary_data[] = ['Symbolic Links', number_format($symlink_count) . " ($symlink_text)"];
+        }
+        
+        if ($password) {
+            $summary_data[] = ['Repository Encryption', 'Enabled'];
+        }
+        
+        $widths = [25, 30];
+        foreach ($summary_data as $row) {
+            $this->display->tableRow($row, $widths);
+        }
+        
+        // Display compression statistics
+        $this->display->header("REPOSITORY SIZE & COMPRESSION");
+        
+        $compression_data = [
+            ['Original Size', $compression_stats['original_formatted']],
+            ['Repository Size', $compression_stats['archive_formatted']],
+        ];
+        
+        // Show size difference with appropriate label
+        if ($compression_stats['difference'] >= 0) {
+            $compression_data[] = ['Size Reduction', $compression_stats['difference_formatted']];
+        } else {
+            $compression_data[] = ['Size Increase', $this->formatFileSizeInline(abs($compression_stats['difference']))];
+        }
+        
+        $compression_data[] = ['Compression Ratio', $compression_stats['ratio_formatted']];
+        
+        foreach ($compression_data as $row) {
+            $this->display->tableRow($row, $widths);
         }
         
         echo "\n";
+    }
+    
+    /**
+     * Count files that will be added to the archive
+     * 
+     * @param string $temp_dir Temporary directory containing files to archive
+     * @return int Number of files to be archived
+     */
+    private function countFilesToArchive(string $temp_dir): int {
+        $count = 0;
+        
+        // Count files in files/ directory
+        $files_dir = "$temp_dir/files";
+        if (is_dir($files_dir)) {
+            $count += count(scandir($files_dir)) - 2; // Subtract . and ..
+        }
+        
+        // Count files in versions/ directory
+        $versions_dir = "$temp_dir/versions";
+        if (is_dir($versions_dir)) {
+            $count += count(scandir($versions_dir)) - 2; // Subtract . and ..
+        }
+        
+        // Add bitfreeze.php and README.txt
+        $count += 2;
+        
+        return $count;
+    }
+    
+    /**
+     * Add nice level to RAR command
+     * 
+     * @param string $rar_cmd Base RAR command
+     * @return string RAR command with nice level
+     */
+    private function addNiceToRarCommand(string $rar_cmd): string {
+        $args = new ArgumentHandler();
+        $nice_level = $args->getFlag('--low-priority') ? 10 : 1;
+        return "nice -n $nice_level $rar_cmd";
+    }
+    
+    /**
+     * Calculate compression ratio and size difference
+     * 
+     * @param int $original_size Total size of original files in bytes
+     * @param int $archive_size Size of archive file in bytes
+     * @return array Array with compression statistics
+     */
+    private function calculateCompressionStats(int $original_size, int $archive_size): array {
+        if ($original_size === 0) {
+            return [
+                'ratio'                 => 0,
+                'difference'            => 0,
+                'ratio_formatted'       => '0%',
+                'difference_formatted'  => '0 Bytes',
+                'original_formatted'    => '0 Bytes',
+                'archive_formatted'     => '0 Bytes'
+            ];
+        }
+        
+        // Calculate compression ratio: (original - archive) / original * 100
+        $ratio = (($original_size - $archive_size) / $original_size) * 100;
+        $difference = $original_size - $archive_size;
+        
+        return [
+            'ratio'                 => $ratio,
+            'difference'            => $difference,
+            'ratio_formatted'       => number_format($ratio, 1) . '%',
+            'difference_formatted'  => $this->formatFileSizeInline($difference),
+            'original_formatted'    => $this->formatFileSizeInline($original_size),
+            'archive_formatted'     => $this->formatFileSizeInline($archive_size)
+        ];
+    }
+    
+    /**
+     * Format commit information for display
+     * 
+     * @param array $manifest Manifest array with 'id' and 'ts' keys
+     * @return string Formatted commit information
+     */
+    private function formatCommitDisplay(array $manifest): string {
+        if (!isset($manifest['id']) || !isset($manifest['ts'])) {
+            return "Unknown Commit";
+        }
+        
+        // Parse the timestamp (format: YYYY-MM-DD HH:MM:SS)
+        $timestamp = strtotime($manifest['ts']);
+        if ($timestamp === false) {
+            return "Commit {$manifest['id']} ({$manifest['ts']})";
+        }
+        
+        // Format as mm/dd/yyyy hh:ii:ss AM/PM
+        return "Commit " . $manifest['id'] . " " . date('m/d/Y h:i:s A', $timestamp);
     }
     
     /**
@@ -755,7 +928,9 @@ class CommandManager {
         
         $summary_data[] = ['Total Changes', count($new_files) + count($mod_files) + count($del_files) + ($include_meta ? count($mta_files) : 0) + ($include_checksum ? count($md5_files) : 0)];
         
-        $widths = [20, 10];
+        // Calculate optimal column widths using DisplayManager
+        $widths = $this->display->calculateOptimalColumnWidths($summary_data);
+        
         foreach ($summary_data as $row) {
             $this->display->tableRow($row, $widths);
         }
@@ -1045,7 +1220,7 @@ class CommandManager {
             }
         }
 
-        echo "\rFinalizing " . number_format($n+1) . " of " . number_format($count) . " files";
+        echo "\rFinalizing " . number_format($count) . " of " . number_format($count) . " files";
         echo "\n";
 
         // Restore directory metadata after all files are processed
@@ -1920,7 +2095,9 @@ class CommandManager {
             ['💬 Comment', $comment]
         ]);
 
-        $widths = [30, 25];
+        // Calculate optimal column widths using DisplayManager
+        $widths = $this->display->calculateOptimalColumnWidths($backup_stats);
+        
         foreach ($backup_stats as $row) {
             $this->display->tableRow($row, $widths);
         }
@@ -2774,13 +2951,12 @@ class CommandManager {
  * functionality into a single, maintainable class.
  */
 class SystemManager {
-    private $display;
     
     /**
      * Constructor
      */
     public function __construct() {
-        $this->display = new DisplayManager();
+
     }
     
     /**
@@ -2791,12 +2967,14 @@ class SystemManager {
     public function canElevatePrivileges(): bool {
         // Check if sudo command exists
         exec('which sudo 2>/dev/null', $output, $code);
+
         if ($code !== 0) {
             return false;
         }
-        
+
         // Test if user can run sudo (this will prompt for password if needed)
         exec('sudo -n true 2>/dev/null', $output, $code);
+
         return $code === 0;
     }
 
@@ -2819,7 +2997,7 @@ class SystemManager {
         }
 
         echo "Enter your sudo password to continue (or press Enter to skip): ";
-        
+
         // Hide input for security (only if we're in an interactive terminal)
         if (posix_isatty(STDIN)) {
             system('stty -echo');
@@ -2830,12 +3008,12 @@ class SystemManager {
             $password = trim(fgets(STDIN));
             echo "\n";
         }
-        
+
         if (empty($password)) {
             echo "Skipping sudo access. Files will be processed with current user permissions.\n";
             return null;
         }
-        
+
         return $password;
     }
 
@@ -2850,11 +3028,11 @@ class SystemManager {
     */
     public function executeWithSudo(string $command, string $password): bool {
         $escaped_password = escapeshellarg($password);
-        
+
         // Use printf to pipe password to sudo without triggering the prompt
         // The -p option with empty string suppresses the prompt
         $full_command = "printf '%s\n' $escaped_password | sudo -p '' -S $command 2>/dev/null";
-        
+
         exec($full_command, $output, $code);
         return $code === 0;
     }
@@ -2866,20 +3044,21 @@ class SystemManager {
      */
     public function getNiceLevel(): string {
         global $argv;
-        
+
         if (!$argv) {
             return '';
         }
-        
+
+        // Check if low priority is requested
         foreach ($argv as $arg) {
             if ($arg === '--low-priority') {
                 return 'nice -n 10 ';
             }
         }
-        
+
         return '';
     }
-    
+
     /**
      * Add nice level to RAR command
      * 
@@ -2888,14 +3067,14 @@ class SystemManager {
      */
     public function addNiceToRarCommand(string $rar_cmd): string {
         $nice_prefix = $this->getNiceLevel();
-        
+
         if (!empty($nice_prefix)) {
             return $nice_prefix . $rar_cmd;
         }
-        
+
         return $rar_cmd;
     }
-    
+
     /**
      * Check if current user is root
      * 
@@ -2904,7 +3083,7 @@ class SystemManager {
     public function isRoot(): bool {
         return function_exists('posix_getuid') && posix_getuid() === 0;
     }
-    
+
     /**
      * Get system temporary directory
      * 
@@ -2913,7 +3092,7 @@ class SystemManager {
     public function getTempDir(): string {
         return sys_get_temp_dir();
     }
-    
+
     /**
      * Create temporary directory with unique name
      * 
@@ -2922,7 +3101,9 @@ class SystemManager {
      */
     public function createTempDir(string $prefix = 'rarrepo_'): string {
         $temp_dir = $this->getTempDir() . '/' . $prefix . uniqid(mt_rand(), true);
+
         mkdir($temp_dir, 0700, true);
+
         return $temp_dir;
     }
     
@@ -2936,10 +3117,11 @@ class SystemManager {
         if (!is_dir($temp_dir)) {
             return false;
         }
-        
+
         $command = 'rm -rf ' . escapeshellarg($temp_dir);
+
         exec($command, $output, $code);
-        
+
         return $code === 0;
     }
 
@@ -2961,12 +3143,13 @@ class SystemManager {
         ) {
             return $path;
         }
-    
+
         // Make relative path absolute from current directory
         return getcwd() . '/' . $path;
     }
 
 }
+
 // === END INLINED: /src/systemManager.php ===
 
 
@@ -2979,11 +3162,9 @@ class SystemManager {
  * Eliminates duplicate code across multiple password functions.
  */
 class PasswordManager {
-    private $display;
     private $archive_manager;
-    
+
     public function __construct() {
-        $this->display = new DisplayManager();
         $this->archive_manager = new ArchiveManager();
     }
     
@@ -2994,7 +3175,7 @@ class PasswordManager {
      */
     public function getPasswordFromArgs(): ?string {
         global $argv;
-        
+
         // Check for -p argument
         for ($i = 1; $i < count($argv); $i++) {
             if ($argv[$i] === '-p') {
@@ -3002,14 +3183,15 @@ class PasswordManager {
                 if (isset($argv[$i + 1]) && $argv[$i + 1][0] !== '-') {
                     return $argv[$i + 1];
                 }
+
                 // If -p is provided without a value, return null
                 return null;
             }
         }
-        
+
         return null;
     }
-    
+
     /**
      * Check if -p flag was used without a value (indicating user wants to be prompted)
      * 
@@ -3017,21 +3199,22 @@ class PasswordManager {
      */
     public function shouldPromptForPassword(): bool {
         global $argv;
-        
+
         for ($i = 1; $i < count($argv); $i++) {
             if ($argv[$i] === '-p') {
                 // If -p is followed by a value, password was already provided
                 if (isset($argv[$i + 1]) && $argv[$i + 1][0] !== '-') {
                     return false;
                 }
+
                 // If -p is provided without a value, we should prompt
                 return true;
             }
         }
-        
+
         return false;
     }
-    
+
     /**
      * Prompt user for encryption password interactively
      * 
@@ -3039,69 +3222,69 @@ class PasswordManager {
      */
     public function promptForEncryptionPassword(): ?string {
         echo "Enter encryption password: ";
-        
+
         $password = $this->getHiddenInput();
-        
+
         if (empty($password)) {
             echo "No password provided. Exiting.\n";
             exit(1);
         }
-        
+
         return $password;
     }
-    
+
     /**
-     * Prompt user for archive password interactively
+     * Prompt user for repository password interactively
      * 
-     * @param string $archive_name Name of the archive for the prompt
+     * @param string $repository_name Name of the repository for the prompt
      * @return string|null The password entered by user, or null if cancelled
      */
-    public function promptForArchivePassword(string $archive_name): ?string {
-        echo "Archive '$archive_name' is password protected.\n";
+    public function promptForRepositoryPassword(string $repository_name): ?string {
+        echo "Repository '$repository_name' is password protected.\n";
         echo "Enter password: ";
-        
+
         $password = $this->getHiddenInput();
-        
+
         if (empty($password)) {
             echo "No password provided. Exiting.\n";
             exit(1);
         }
-        
+
         return $password;
     }
-    
+
     /**
      * Prompt for password with retry logic
      * 
-     * @param string $archive_name Name of the archive for the prompt
+     * @param string $repository_name Name of the repository for the prompt
      * @param callable $test_function Function to test if password is correct
      * @return string|null The correct password or null if user cancels
      */
-    public function promptForPasswordWithRetry(string $archive_name, callable $test_function): ?string {
-        $max_attempts = 3;
-        $attempt = 0;
+    public function promptForPasswordWithRetry(string $repository_name, callable $test_function): ?string {
+        $max_attempts   = 3;
+        $attempt        = 0;
         
         while ($attempt < $max_attempts) {
             $attempt++;
-            
-            echo "Repository '$archive_name' is password protected.\n";
+
+            echo "Repository '$repository_name' is password protected.\n";
             echo "Enter password: ";
-            
+
             $password = $this->getHiddenInput();
-            
+
             if (empty($password)) {
                 echo "No password provided. Exiting.\n";
                 exit(1);
             }
-            
+
             // Test the password
             if ($test_function($password)) {
                 return $password;
             }
-            
+
             // Password was incorrect
-            echo "Incorrect password for $archive_name\n";
-            
+            echo "Incorrect password for $repository_name\n";
+
             if ($attempt < $max_attempts) {
                 echo "Please try again.\n";
             } else {
@@ -3120,39 +3303,44 @@ class PasswordManager {
      * @return string|null The password or null if user cancels
      */
     public function getPasswordWithDetection(string $rarfile): ?string {
-        $password = $this->getPasswordFromArgs();
-        $should_prompt = $this->shouldPromptForPassword();
+        $password       = $this->getPasswordFromArgs();
+        $should_prompt  = $this->shouldPromptForPassword();
         
-        // If no password provided or -p was used without value, check if archive is encrypted
+        // If no password provided or -p was used without value, check if repository  is encrypted
         if ($password === null || $should_prompt) {
             if (file_exists($rarfile)) {
-                // Archive exists - check if it's encrypted
+                // Repository exists - check if it's encrypted
                 if ($this->archive_manager->isEncrypted($rarfile)) {
-                    // Create a test function for this specific archive
+
+                    // Create a test function for this specific repository
                     $test_function = function($test_password) use ($rarfile) {
                         return $this->archive_manager->testPassword($rarfile, $test_password);
                     };
+
                     $password = $this->promptForPasswordWithRetry(basename($rarfile), $test_function);
                 }
             } else if ($should_prompt) {
-                // Archive doesn't exist but -p was used without value - prompt for encryption password
+                // Repository doesn't exist but -p was used without value - prompt for encryption password
                 $password = $this->promptForEncryptionPassword();
             }
         } else if ($password !== null && file_exists($rarfile) && $this->archive_manager->isEncrypted($rarfile)) {
             // If password was provided via command line, test it
             if (!$this->archive_manager->testPassword($rarfile, $password)) {
+
                 echo "Incorrect password for " . basename($rarfile) . "\n";
+
                 // Create a test function for this specific archive
                 $test_function = function($test_password) use ($rarfile) {
                     return $this->archive_manager->testPassword($rarfile, $test_password);
                 };
+
                 $password = $this->promptForPasswordWithRetry(basename($rarfile), $test_function);
             }
         }
         
         return $password;
     }
-    
+
     /**
      * Get hidden input from user (password input)
      * 
@@ -3186,36 +3374,35 @@ class PasswordManager {
  * Handles manifest parsing, archive utilities, and other general-purpose functions.
  */
 class UtilityManager {
-    private $display;
     
     public function __construct() {
-        $this->display = new DisplayManager();
+
     }
     
     /**
      * Parse manifest entry line
- * 
- * @param string $line Manifest entry line
- * @return array|false Parsed entry or false if invalid
- */
+    * 
+    * @param string $line Manifest entry line
+    * @return array|false Parsed entry or false if invalid
+    */
     public function parseManifestEntry(string $line) {
-    $parts = explode("\t", $line);
-    
+        $parts = explode("\t", $line);
+
         if (count($parts) < 2) {
-        return false;
-    }
-        
+            return false;
+        }
+
         // Check if this is a symlink entry
         if ($parts[1] === '[LINK]') {
             return $this->parseSymlinkEntry($line);
         }
-    
-    $entry = [
+
+        $entry = [
             'path' => $parts[0],
             'hash' => $parts[1]
-    ];
+        ];
 
-    $entry['metadata'] = [
+        $entry['metadata'] = [
             'permissions'   => $parts[2],
             'owner'         => $parts[3],
             'group'         => $parts[4],
@@ -3227,7 +3414,7 @@ class UtilityManager {
 
         return $entry;
     }
-    
+
     /**
      * Parse symlink manifest entry
      * 
@@ -3236,27 +3423,27 @@ class UtilityManager {
      */
     public function parseSymlinkEntry(string $line) {
         $parts = explode("\t", $line);
-        
+
         if (count($parts) < 4) {
             return false;
         }
-        
+
         return [
             'path'      => $parts[0],
             'hash'      => $parts[1],
             'target'    => $parts[2],
             'metadata'  => [
-        'permissions'   => $parts[3],
-        'owner'         => $parts[4],
-        'group'         => $parts[5],
-        'mtime'         => (int)$parts[6],
-        'atime'         => (int)$parts[7],
-        'ctime'         => (int)$parts[8],
-        'size'          => (int)$parts[9]
+                'permissions'   => $parts[3],
+                'owner'         => $parts[4],
+                'group'         => $parts[5],
+                'mtime'         => (int)$parts[6],
+                'atime'         => (int)$parts[7],
+                'ctime'         => (int)$parts[8],
+                'size'          => (int)$parts[9]
             ]
         ];
     }
-    
+
     /**
      * Get the next available commit ID
      * 
@@ -3270,7 +3457,7 @@ class UtilityManager {
         if (!file_exists($rarfile)) {
             return 1;
         }
-        
+
         $rar_cmd = 'rar lb';
 
         if ($password) {
@@ -3281,9 +3468,9 @@ class UtilityManager {
         
         // Add input redirection to prevent password prompts
         $rar_cmd .= ' </dev/null 2>/dev/null';
-        
+
         exec($rar_cmd, $lines, $code);
-        
+
         // If command failed for any reason, return 1 (new archive)
         if ($code !== 0) {
             return 1;
@@ -3301,7 +3488,7 @@ class UtilityManager {
 
         return $max + 1;
     }
-    
+
     /**
      * Format file size in human-readable format
      * 
@@ -3319,6 +3506,7 @@ class UtilityManager {
         return round($bytes, $precision) . ' ' . $units[$i];
     }
 }
+
 // === END INLINED: /src/utilityManager.php ===
 
 
@@ -3332,12 +3520,12 @@ class UtilityManager {
 class ProgressManager {
     private $display;
     private $progress_bar_width;
-    
+
     public function __construct() {
-        $this->display = new DisplayManager();
-        $this->progress_bar_width = 49; // Default progress bar width
+        $this->display              = new DisplayManager();
+        $this->progress_bar_width   = 49; // Default progress bar width
     }
-    
+
     /**
      * Create a progress bar with optional spinning indicator
      * 
@@ -3348,25 +3536,27 @@ class ProgressManager {
      * @return string Formatted progress bar string
      */
     public function createProgressBar(float $current, float $total, int $width = null, bool $spinning = false): string {
-        if ($total <= 0) return '';
-        
-        $width = $width ?? $this->progress_bar_width;
+        if ($total <= 0) {
+            return '';
+        }
+
+        $width      = $width ?? $this->progress_bar_width;
         $percentage = min(100, ($current / $total) * 100);
-        $filled = round(($width * $percentage) / 100);
-        $empty = $width - $filled;
-        
-        $bar = $this->display->colorize(str_repeat('█', $filled), DisplayManager::COLOR_GREEN);
-        $bar .= $this->display->colorize(str_repeat('░', $empty), DisplayManager::COLOR_DIM);
-        
-        $spinner = '';
+        $filled     = round(($width * $percentage) / 100);
+        $empty      = $width - $filled;
+
+        $bar        = $this->display->colorize(str_repeat('█', $filled), DisplayManager::COLOR_GREEN);
+        $bar        .= $this->display->colorize(str_repeat('░', $empty), DisplayManager::COLOR_DIM);
+        $spinner    = '';
+
         if ($spinning && $percentage < 100) {
             $spinners = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
             $spinner = ' ' . $spinners[intval(microtime(true) * 10) % count($spinners)];
         }
-        
+
         return sprintf("[%s] %.2f%%%s", $bar, $percentage, $spinner);
     }
-    
+
     /**
      * Execute RAR command with progress tracking
      * 
@@ -3815,6 +4005,35 @@ class DisplayManager {
      */
     public function info(string $message): void {
         echo $this->colorize("$message", self::COLOR_CYAN) . "\n";
+    }
+    
+    /**
+     * Calculate optimal column widths for a table based on content
+     * 
+     * @param array $table_data Array of rows, where each row is an array of columns
+     * @param int $padding Additional padding to add to each column width
+     * @return array Array of calculated column widths
+     */
+    public function calculateOptimalColumnWidths(array $table_data, int $padding = 2): array {
+        if (empty($table_data)) {
+            return [20, 20]; // Default fallback
+        }
+        
+        $num_columns = count($table_data[0]);
+        $column_widths = array_fill(0, $num_columns, 0);
+        
+        foreach ($table_data as $row) {
+            foreach ($row as $col_index => $cell) {
+                $column_widths[$col_index] = max($column_widths[$col_index], mb_strlen($cell));
+            }
+        }
+        
+        // Add padding to each column
+        foreach ($column_widths as &$width) {
+            $width += $padding;
+        }
+        
+        return $column_widths;
     }
     
     /**
@@ -5103,10 +5322,13 @@ class FileSystemManager {
      */
     private function getPartitionSize(string $device): int {
         $output = [];
+
         exec("lsblk -b -n -o SIZE $device 2>/dev/null", $output);
+
         if (!empty($output[0])) {
             return (int)trim($output[0]);
         }
+
         return 0;
     }
     
@@ -5121,12 +5343,16 @@ class FileSystemManager {
         $free   = disk_free_space($mount_point);
 
         if ($total === false || $free === false) {
-            return ['used' => 0, 'free' => 0, 'usage_percent' => 0];
+            return [
+                'used'              => 0,
+                'free'              => 0,
+                 'usage_percent'    => 0
+            ];
         }
 
         $used           = $total - $free;
         $usage_percent  = $total > 0 ? round(($used / $total) * 100, 1) : 0;
-        
+
         return [
             'used'          => $used,
             'free'          => $free,
@@ -5194,22 +5420,23 @@ class FileSystemManager {
      * @return string Description
      */
     private function getPartitionDescription(string $mount_point, string $filesystem): string {
-        if ($mount_point === '/') {
-            return 'Root filesystem';
-        } elseif ($mount_point === '/home') {
-            return 'User home directories';
-        } elseif ($mount_point === '/var') {
-            return 'Variable data (logs, packages)';
-        } elseif ($mount_point === '/boot') {
-            return 'Boot files and kernels';
-        } elseif ($mount_point === '/etc') {
-            return 'System configuration';
-        } elseif (strpos($mount_point, '/media/') === 0) {
-            return 'External media';
-        } elseif (strpos($mount_point, '/mnt/') === 0) {
-            return 'Mounted filesystem';
-        } else {
-            return ucfirst($filesystem) . ' filesystem';
+        switch (true) {
+            case $mount_point === '/':
+                return 'Root filesystem';
+            case $mount_point === '/home':
+                return 'User home directories';
+            case $mount_point === '/var':
+                return 'Variable data (logs, packages)';
+            case $mount_point === '/boot':
+                return 'Boot files and kernels';
+            case $mount_point === '/etc':
+                return 'System configuration';
+            case strpos($mount_point, '/media/') === 0:
+                return 'External media';
+            case strpos($mount_point, '/mnt/') === 0:
+                return 'Mounted filesystem';
+            default:
+                return ucfirst($filesystem) . ' filesystem';
         }
     }
     
@@ -5368,103 +5595,6 @@ class FileSystemManager {
     }
 
     /**
-     * Check if a path is on an unselected partition and should be skipped
-     * 
-     * @param string $path Path to check
-     * @param int $reference_device_id Reference device ID of the starting partition
-     * @param array $selected_partitions Array of selected partition info
-     * @return bool True if path should be skipped (unselected partition), false if should proceed
-     */
-    private function shouldSkipUnselectedPartition(string $path, int $reference_device_id, array $selected_partitions): bool {
-        $stat       = @stat($path);
-        $device_id  = null;
-
-        if ($stat === false) {  // If we can't stat the path, try with sudo
-            if ($this->sudo_password !== null && $this->can_elevate) {
-                $escaped_path   = escapeshellarg($path);
-                $command        = "stat -c '%d' $escaped_path"; // %d gives device ID in decimal
-                $output         = [];
-
-                exec("printf '%s\n' " . escapeshellarg($this->sudo_password) . " | sudo -p '' -S $command 2>/dev/null", $output, $code);
-
-                if ($code === 0 && !empty($output[0])) {
-                    $device_id = (int)trim($output[0]);
-                }
-            }
-
-            if ($device_id === null) {  // If we can't determine device ID, assume unselected partition for safety
-                debug_echo("\r\033[K" . "⚠️ DEBUG: Cannot determine device ID for: $path (assuming unselected partition)\n");
-                return true;
-            }
-        } else {
-            $device_id = $stat['dev'];
-        }
-
-        if ($device_id === $reference_device_id) {  // If it's the same device as the starting partition, allow it
-            return false;
-        }
-
-        // Check if this device ID matches any of the selected partitions
-        $mount_point = $this->getPartitionMountPointForPath($path);
-
-        foreach ($selected_partitions as $partition) {
-            if ($partition['mount_point'] === $mount_point) {
-                //debug_echo("\r\033[K" . "✅ DEBUG: Allowing selected partition: $path (mount: $mount_point)\n");
-                return false; // This partition is selected, don't skip
-            }
-        }
-        
-        // This partition is not selected, skip it
-        $this->logPartitionBoundary($path, $device_id, $reference_device_id, $mount_point, false);
-        return true;
-    }
-    
-    /**
-     * Get the mount point for a given path
-     * 
-     * @param string $path Path to check
-     * @return string Mount point path
-     */
-    private function getPartitionMountPointForPath(string $path): string {
-        $escaped_path   = escapeshellarg($path);  // Use df command to get mount point for the path
-        $output         = [];
-
-        exec("df --output=target $escaped_path 2>/dev/null | tail -n 1", $output);
-        
-        if (!empty($output[0])) {
-            return trim($output[0]);
-        }
-        
-        $current_path = realpath($path);  // Fallback: try to determine mount point by walking up the directory tree
-
-        if ($current_path === false) {
-            return '/'; // Default fallback
-        }
-        
-        $path_stat = @stat($current_path);
-
-        if ($path_stat === false) {
-            return '/'; // Default fallback
-        }
-
-        $current_device = $path_stat['dev'];
-        
-        // Walk up the directory tree until device changes
-        while ($current_path !== '/' && $current_path !== '') {
-            $parent_path = dirname($current_path);
-            $parent_stat = @stat($parent_path);
-
-            if ($parent_stat && $parent_stat['dev'] !== $current_device) {
-                return $current_path;  // Device changed, current_path is the mount point
-            }
-
-            $current_path = $parent_path;
-        }
-
-        return '/'; // Root filesystem
-    }
-    
-    /**
      * Get available disk space for a directory
      * 
      * @param string $directory Directory path to check
@@ -5499,7 +5629,10 @@ class FileSystemManager {
         exec("sudo blockdev --getsize64 $escaped_device 2>/dev/null", $output, $code);
 
         if ($code !== 0 || empty($output[0])) {
-            return ['raw_size' => 0, 'estimated_compressed' => 0];
+            return [
+                'raw_size'              => 0,
+                'estimated_compressed'  => 0
+            ];
         }
 
         $raw_size = (int)trim($output[0]);
@@ -5621,66 +5754,72 @@ class FileSystemManager {
         try {
             // Step 1: Create raw image using dd
             $dd_result = $this->createRawImage($device_path, $temp_image, $progress_callback);
+
             if (!$dd_result['success']) {
                 @unlink($temp_image);
                 return ['success' => false, 'error' => 'DD operation failed: ' . $dd_result['error']];
             }
-            
+
             // Step 2: Calculate hash of raw image
             if ($progress_callback) {
                 $progress_callback('Calculating image hash...', 90);
             }
-            
+
             $hash = $this->getFileMd5($temp_image);
+
             if ($hash === false) {
                 @unlink($temp_image);
                 return ['success' => false, 'error' => 'Failed to calculate image hash'];
             }
-            
+
             // Step 3: Move to final location with MD5 name
             $final_path = $output_dir . '/' . $hash;
-            
+
             // Check if image with this hash already exists (deduplication)
             if (file_exists($final_path)) {
                 @unlink($temp_image);
+
                 if ($progress_callback) {
                     $progress_callback('Image already exists (deduplicated)', 100);
                 }
                 
                 return [
-                    'success' => true,
-                    'hash' => $hash,
-                    'size' => filesize($final_path),
-                    'metadata' => $metadata,
-                    'deduplicated' => true
+                    'success'       => true,
+                    'hash'          => $hash,
+                    'size'          => filesize($final_path),
+                    'metadata'      => $metadata,
+                    'deduplicated'  => true
                 ];
             }
-            
+
             // Rename temp image to final MD5-based name
             if (!rename($temp_image, $final_path)) {
                 @unlink($temp_image);
-                return ['success' => false, 'error' => 'Failed to rename image to MD5 filename'];
+
+                return [
+                    'success'   => false,
+                    'error'     => 'Failed to rename image to MD5 filename'
+                ];
             }
-            
+
             if ($progress_callback) {
                 $progress_callback('Image creation complete', 100);
             }
-            
+
             return [
-                'success' => true,
-                'hash' => $hash,
-                'size' => filesize($final_path),
-                'metadata' => $metadata,
-                'deduplicated' => false
+                'success'       => true,
+                'hash'          => $hash,
+                'size'          => filesize($final_path),
+                'metadata'      => $metadata,
+                'deduplicated'  => false
             ];
-            
         } catch (Exception $e) {
             // Clean up on error
             @unlink($temp_image);
             return ['success' => false, 'error' => 'Exception: ' . $e->getMessage()];
         }
     }
-    
+
     /**
      * Create raw partition image using dd
      * 
@@ -5692,38 +5831,40 @@ class FileSystemManager {
     private function createRawImage(string $device_path, string $output_path, ?callable $progress_callback = null): array {
         $escaped_device = escapeshellarg($device_path);
         $escaped_output = escapeshellarg($output_path);
-        
+
         // Use dd with status=progress for monitoring
         $dd_cmd = "sudo dd if=$escaped_device of=$escaped_output bs=1M status=progress 2>&1";
-        
+
         // Execute dd with progress monitoring
         $process = popen($dd_cmd, 'r');
+
         if (!$process) {
             return ['success' => false, 'error' => 'Failed to start dd process'];
         }
-        
-        $output_lines = [];
-        $last_progress = 0;
-        
+
+        $output_lines   = [];
+        $last_progress  = 0;
+
         while (!feof($process)) {
             $line = fgets($process);
+
             if ($line !== false) {
                 $output_lines[] = trim($line);
                 
                 // Parse dd progress output
                 if ($progress_callback && preg_match('/(\d+) bytes.* copied/i', $line, $matches)) {
                     $bytes_copied = (int)$matches[1];
-                    // Estimate progress (we don't know total size during dd)
-                    // Use time-based estimation instead
+                    // Estimate progress (we don't know total size during dd), use time-based estimation instead
                     $current_time = time();
+
                     if (!isset($start_time)) {
                         $start_time = $current_time;
                     }
-                    
+
                     // Progress estimation based on time (rough)
-                    $elapsed = $current_time - $start_time;
-                    $progress = min(85, $elapsed * 3); // Assume max 85% for dd phase (no compression)
-                    
+                    $elapsed    = $current_time - $start_time;
+                    $progress   = min(85, $elapsed * 3); // Assume max 85% for dd phase (no compression)
+
                     if ($progress > $last_progress + 5) { // Update every 5%
                         $progress_callback("Creating raw image: " . $this->formatBytes($bytes_copied) . " copied", $progress);
                         $last_progress = $progress;
@@ -5731,22 +5872,28 @@ class FileSystemManager {
                 }
             }
         }
-        
-        $exit_code = pclose($process);
-        
-        if ($exit_code !== 0) {
-            return ['success' => false, 'error' => 'DD failed with exit code ' . $exit_code . ': ' . implode("\n", $output_lines)];
-        }
-        
-        if (!file_exists($output_path)) {
-            return ['success' => false, 'error' => 'DD completed but output file not found'];
-        }
-        
-        return ['success' => true];
-    }
-    
 
-    
+        $exit_code = pclose($process);
+
+        if ($exit_code !== 0) {
+            return [
+                'success'   => false,
+                'error'     => 'DD failed with exit code ' . $exit_code . ': ' . implode("\n", $output_lines)
+            ];
+        }
+
+        if (!file_exists($output_path)) {
+            return [
+                'success'   => false,
+                'error'     => 'DD completed but output file not found'
+            ];
+        }
+
+        return [
+            'success' => true
+        ];
+    }
+
     /**
      * Collect partition metadata for restore purposes
      * 
@@ -5757,45 +5904,55 @@ class FileSystemManager {
     private function collectPartitionMetadata(string $device_path, string $mount_point): array {
         $metadata = [
             'source_device' => $device_path,
-            'source_mount' => $mount_point,
+            'source_mount'  => $mount_point,
             'creation_time' => time()
         ];
-        
+
         // Get filesystem type
         $escaped_device = escapeshellarg($device_path);
-        $output = [];
+        $output         = [];
+
         exec("blkid -s TYPE -o value $escaped_device 2>/dev/null", $output);
+
         if (!empty($output[0])) {
             $metadata['filesystem'] = trim($output[0]);
         }
-        
+
         // Get UUID
-        $output = [];
+        $output         = [];
+
         exec("blkid -s UUID -o value $escaped_device 2>/dev/null", $output);
+
         if (!empty($output[0])) {
             $metadata['uuid'] = trim($output[0]);
         }
-        
+
         // Get label
-        $output = [];
+        $output         = [];
+
         exec("blkid -s LABEL -o value $escaped_device 2>/dev/null", $output);
+
         if (!empty($output[0])) {
             $metadata['label'] = trim($output[0]);
         }
-        
+
         // Get block size and total blocks
-        $output = [];
+        $output         = [];
+
         exec("sudo blockdev --getbsz $escaped_device 2>/dev/null", $output);
+
         if (!empty($output[0])) {
             $metadata['block_size'] = (int)trim($output[0]);
         }
-        
-        $output = [];
+
+        $output         = [];
+
         exec("sudo blockdev --getsize $escaped_device 2>/dev/null", $output);
+
         if (!empty($output[0])) {
             $metadata['total_blocks'] = (int)trim($output[0]);
         }
-        
+
         return $metadata;
     }
     
@@ -5808,16 +5965,17 @@ class FileSystemManager {
      */
     public function createImagesMetadata(array $image_info, string $output_path): bool {
         $metadata = [
-            'created_time' => time(),
-            'format_version' => '1.0',
-            'images' => $image_info
+            'created_time'      => time(),
+            'format_version'    => '1.0',
+            'images'            => $image_info
         ];
-        
+
         $json = json_encode($metadata, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+
         if ($json === false) {
             return false;
         }
-        
+
         return $this->writeFileContents($output_path, $json) !== false;
     }
     
@@ -5830,22 +5988,26 @@ class FileSystemManager {
      * @return array Result with 'success', 'images_info', 'errors'
      */
     public function processPartitionImages(array $selected_partitions, string $temp_images_dir, ?callable $progress_callback = null): array {
-        $images_info = [];
-        $errors = [];
-        $total_images = 0;
-        $processed_images = 0;
-        
+        $images_info        = [];
+        $errors             = [];
+        $total_images       = 0;
+        $processed_images   = 0;
+
         // Count total images to process
         foreach ($selected_partitions as $partition) {
             if ($partition['should_image']) {
                 $total_images++;
             }
         }
-        
+
         if ($total_images === 0) {
-            return ['success' => true, 'images_info' => [], 'errors' => []];
+            return [
+                'success'       => true,
+                'images_info'   => [],
+                'errors'        => []
+            ];
         }
-        
+
         // Create images directory
         if (!is_dir($temp_images_dir)) {
             mkdir($temp_images_dir, 0755, true);
@@ -5855,55 +6017,54 @@ class FileSystemManager {
             if (!$partition['should_image']) {
                 continue;
             }
-            
-            $processed_images++;
-            $mount_point = $partition['mount_point'];
-            $device_path = $this->getDeviceFromMountPoint($mount_point);
-            
+
+            $processed_images   = $processed_images + 1;
+            $mount_point        = $partition['mount_point'];
+            $device_path        = $this->getDeviceFromMountPoint($mount_point);
+
             if (!$device_path) {
                 $errors[] = "Could not determine device for mount point: $mount_point";
                 continue;
             }
-            
+
             // Progress callback for this image
             $image_progress_callback = null;
+
             if ($progress_callback) {
                 $image_progress_callback = function($message, $percent) use ($progress_callback, $processed_images, $total_images) {
                     $overall_percent = (($processed_images - 1) / $total_images) * 100 + ($percent / $total_images);
                     $progress_callback("Image $processed_images/$total_images: $message", $overall_percent);
                 };
             }
-            
+
             // Create the image (MD5-named, stored in temp_images_dir)
             $result = $this->createPartitionImage($device_path, $temp_images_dir, $mount_point, $image_progress_callback);
-            
+
             if ($result['success']) {
                 $images_info[] = [
                     'source_device' => $device_path,
-                    'source_mount' => $mount_point,
-                    'filesystem' => $result['metadata']['filesystem'] ?? 'unknown',
-                    'image_size' => $result['size'],
-                    'image_hash' => $result['hash'],  // MD5 hash - used as filename in images/ directory
+                    'source_mount'  => $mount_point,
+                    'filesystem'    => $result['metadata']['filesystem'] ?? 'unknown',
+                    'image_size'    => $result['size'],
+                    'image_hash'    => $result['hash'],  // MD5 hash - used as filename in images/ directory
                     'creation_time' => $result['metadata']['creation_time'],
-                    'restore_info' => $result['metadata'],
-                    'deduplicated' => $result['deduplicated'] ?? false
+                    'restore_info'  => $result['metadata'],
+                    'deduplicated'  => $result['deduplicated'] ?? false
                 ];
             } else {
                 $errors[] = "Failed to create image for $mount_point: " . $result['error'];
             }
         }
-        
+
         $success = empty($errors) || count($images_info) > 0; // Success if we got at least one image
-        
+
         return [
-            'success' => $success,
-            'images_info' => $images_info,
-            'errors' => $errors
+            'success'       => $success,
+            'images_info'   => $images_info,
+            'errors'        => $errors
         ];
     }
-    
 
-    
     /**
      * Format bytes into human readable format
      * 
@@ -5915,26 +6076,9 @@ class FileSystemManager {
         $factor = floor((strlen($bytes) - 1) / 3);
         return sprintf("%.2f %s", $bytes / pow(1024, $factor), $units[$factor]);
     }
-    
-    /**
-     * Log partition boundary detection for debugging
-     * 
-     * @param string $path Path being checked
-     * @param int $current_device Device ID of current path
-     * @param int $reference_device Reference device ID
-     * @param string $mount_point Mount point of the path
-     * @param bool $is_selected Whether this partition is selected for backup
-     */
-    private function logPartitionBoundary(string $path, int $current_device, int $reference_device, string $mount_point = '', bool $is_selected = false): void {
-        debug_echo("\r\033[K" . "🔍 DEBUG: Partition boundary detected:\n");
-        debug_echo("  Path: $path\n");
-        debug_echo("  Current device: $current_device\n");
-        debug_echo("  Reference device: $reference_device\n");
-        debug_echo("  Mount point: $mount_point\n");
-        debug_echo("  Selected for backup: " . ($is_selected ? 'Yes' : 'No') . "\n");
-    }
 
 }
+
 // === END INLINED: /src/fileSystemManager.php ===
 
 
@@ -6352,12 +6496,11 @@ class ArchiveManager {
  * Handles required function checks, memory management, and system validation.
  */
 class SystemHealthManager {
-    private $display;
     
     public function __construct() {
-        $this->display = new DisplayManager();
+
     }
-    
+
     /**
      * Check if all required PHP functions are available
      * 
@@ -6421,26 +6564,28 @@ class SystemHealthManager {
             'preg_match',
             'escapeshellarg'
         ];
-        
+
         $missing_functions = [];
-        
+
         foreach ($required_functions as $function) {
             if (!function_exists($function)) {
                 $missing_functions[] = $function;
             }
         }
-        
+
         if (!empty($missing_functions)) {
             echo "ERROR: Required PHP functions are missing:\n";
+
             foreach ($missing_functions as $function) {
                 echo "  - $function()\n";
             }
+
             return false;
         }
-        
+
         return true;
     }
-    
+
     /**
      * Validate system requirements for bitfreeze
      * 
@@ -6452,28 +6597,30 @@ class SystemHealthManager {
             echo "ERROR: PHP 7.4 or higher is required. Current version: " . PHP_VERSION . "\n";
             return false;
         }
-        
+
         // Check required functions
         if (!$this->checkRequiredFunctions()) {
             return false;
         }
-        
+
         // Check if we're on a supported OS
         if (!in_array(PHP_OS_FAMILY, ['Linux', 'Unix'])) {
             echo "WARNING: bitfreeze is primarily designed for Linux/Unix systems.\n";
             echo "Current OS: " . PHP_OS_FAMILY . "\n";
         }
-        
+
         // Check if RAR command is available
         $output = [];
+
         exec('which rar 2>/dev/null', $output, $code);
+
         if ($code !== 0) {
             echo "ERROR: RAR command not found. Please install RAR archiver.\n";
             echo "On Ubuntu/Debian: sudo apt-get install rar\n";
             echo "On CentOS/RHEL: sudo yum install rar\n";
             return false;
         }
-        
+
         return true;
     }
 }
@@ -6730,6 +6877,14 @@ if (basename(__FILE__) === basename($_SERVER['SCRIPT_NAME'] ?? '')) {
             $cleaned = $args->getCleanedFromZero();
             $system_manager = new SystemManager();
             
+            // Check if we have enough arguments
+            if (count($cleaned) < 2) {
+                echo "ERROR: Archive path required for list command.\n";
+                $command_manager = new CommandManager();
+                $command_manager->showUsage();
+                exit(1);
+            }
+            
             // Convert archive path to absolute and validate
             $archive = $system_manager->getAbsolutePath($cleaned[1]);
             
@@ -6750,25 +6905,49 @@ if (basename(__FILE__) === basename($_SERVER['SCRIPT_NAME'] ?? '')) {
                 return;
             }
             
-            // Use reference.php format for list display
-            echo "Available Commits (most recent first):\n";
-            echo "ID    Date/Time           Comment\n";
-            echo "----------------------------------------\n";
+            // Use header format for list display
+            $display_manager = new DisplayManager();
+            $display_manager->header("AVAILABLE COMMITS");
             
+            // Create table data
+            $table_data = [];
             foreach ($versions as $v) {
                 $comment = $archive_manager->getCommentFromManifest($archive, $v['name']);
-                $comment_display = strlen($comment) > 40 ? substr($comment, 0, 37) . '...' : $comment;
-                echo str_pad($v['id'], 4) . "  " . str_pad($v['ts'], 19) . "  $comment_display\n";
+                $table_data[] = [
+                    'ID' => $v['id'],
+                    'Date/Time' => $v['ts'],
+                    'Comment' => $comment
+                ];
+            }
+            
+            // Calculate column widths to match header width (60 characters)
+            $header_width = 60;
+            $id_width = 8;
+            $date_width = 20;
+            $comment_width = $header_width - $id_width - $date_width - 4; // 4 for separators
+            
+            $widths = [$id_width, $date_width, $comment_width];
+            
+            // Print table header
+            echo str_pad('ID', $id_width) . '  ' . str_pad('Date/Time', $date_width) . '  ' . str_pad('Comment', $comment_width) . "\n";
+            echo str_repeat('-', $header_width) . "\n";
+            
+            // Print table rows
+            foreach ($table_data as $row) {
+                $comment_display = strlen($row['Comment']) > $comment_width ? substr($row['Comment'], 0, $comment_width - 3) . '...' : $row['Comment'];
+                echo str_pad($row['ID'], $id_width) . '  ' . str_pad($row['Date/Time'], $date_width) . '  ' . str_pad($comment_display, $comment_width) . "\n";
             }
             break;
         case 'checkout':
-            if ($args->getCount() < 4 || $args->getCount() > 5) {
+            if ($args->getCount() < 4 || $args->getCount() > 6) {
                 $command_manager = new CommandManager();
                 $command_manager->showUsage();
+                exit(1);
             }
 
             $cleaned = $args->getCleanedFromZero();
             $system_manager = new SystemManager();
+            
             
             // Convert all paths to absolute paths early and validate
             $commit_id = $cleaned[1];
@@ -6794,9 +6973,10 @@ if (basename(__FILE__) === basename($_SERVER['SCRIPT_NAME'] ?? '')) {
             $command_manager->checkout($commit_id, $repository, $outdir, $password);
             break;
         case 'diff':
-            if ($args->getCount() !== 5) {
+            if ($args->getCount() < 5 || $args->getCount() > 7) {
                 $command_manager = new CommandManager();
                 $command_manager->showUsage();
+                exit(1);
             }
 
             $cleaned = $args->getCleanedFromZero();
@@ -6822,6 +7002,7 @@ if (basename(__FILE__) === basename($_SERVER['SCRIPT_NAME'] ?? '')) {
             if ($args->getCount() < 3 || $args->getCount() > 5) {
                 $command_manager = new CommandManager();
                 $command_manager->showUsage();
+                exit(1);
             }
             $cleaned = $args->getCleanedFromZero();
             $system_manager = new SystemManager();
@@ -6854,6 +7035,7 @@ if (basename(__FILE__) === basename($_SERVER['SCRIPT_NAME'] ?? '')) {
             if ($args->getCount() < 2 || $args->getCount() > 4) {
                 $command_manager = new CommandManager();
                 $command_manager->showUsage();
+                exit(1);
             }
             $cleaned = $args->getCleanedFromZero();
             $system_manager = new SystemManager();

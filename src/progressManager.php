@@ -8,12 +8,12 @@
 class ProgressManager {
     private $display;
     private $progress_bar_width;
-    
+
     public function __construct() {
-        $this->display = new DisplayManager();
-        $this->progress_bar_width = 49; // Default progress bar width
+        $this->display              = new DisplayManager();
+        $this->progress_bar_width   = 49; // Default progress bar width
     }
-    
+
     /**
      * Create a progress bar with optional spinning indicator
      * 
@@ -24,25 +24,27 @@ class ProgressManager {
      * @return string Formatted progress bar string
      */
     public function createProgressBar(float $current, float $total, int $width = null, bool $spinning = false): string {
-        if ($total <= 0) return '';
-        
-        $width = $width ?? $this->progress_bar_width;
+        if ($total <= 0) {
+            return '';
+        }
+
+        $width      = $width ?? $this->progress_bar_width;
         $percentage = min(100, ($current / $total) * 100);
-        $filled = round(($width * $percentage) / 100);
-        $empty = $width - $filled;
-        
-        $bar = $this->display->colorize(str_repeat('█', $filled), DisplayManager::COLOR_GREEN);
-        $bar .= $this->display->colorize(str_repeat('░', $empty), DisplayManager::COLOR_DIM);
-        
-        $spinner = '';
+        $filled     = round(($width * $percentage) / 100);
+        $empty      = $width - $filled;
+
+        $bar        = $this->display->colorize(str_repeat('█', $filled), DisplayManager::COLOR_GREEN);
+        $bar        .= $this->display->colorize(str_repeat('░', $empty), DisplayManager::COLOR_DIM);
+        $spinner    = '';
+
         if ($spinning && $percentage < 100) {
             $spinners = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
             $spinner = ' ' . $spinners[intval(microtime(true) * 10) % count($spinners)];
         }
-        
+
         return sprintf("[%s] %.2f%%%s", $bar, $percentage, $spinner);
     }
-    
+
     /**
      * Execute RAR command with progress tracking
      * 

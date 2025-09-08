@@ -128,6 +128,35 @@ class DisplayManager {
     }
     
     /**
+     * Calculate optimal column widths for a table based on content
+     * 
+     * @param array $table_data Array of rows, where each row is an array of columns
+     * @param int $padding Additional padding to add to each column width
+     * @return array Array of calculated column widths
+     */
+    public function calculateOptimalColumnWidths(array $table_data, int $padding = 2): array {
+        if (empty($table_data)) {
+            return [20, 20]; // Default fallback
+        }
+        
+        $num_columns = count($table_data[0]);
+        $column_widths = array_fill(0, $num_columns, 0);
+        
+        foreach ($table_data as $row) {
+            foreach ($row as $col_index => $cell) {
+                $column_widths[$col_index] = max($column_widths[$col_index], mb_strlen($cell));
+            }
+        }
+        
+        // Add padding to each column
+        foreach ($column_widths as &$width) {
+            $width += $padding;
+        }
+        
+        return $column_widths;
+    }
+    
+    /**
      * Print a formatted table row
      * 
      * @param array $columns Array of column values

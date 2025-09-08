@@ -6,36 +6,35 @@
  * Handles manifest parsing, archive utilities, and other general-purpose functions.
  */
 class UtilityManager {
-    private $display;
     
     public function __construct() {
-        $this->display = new DisplayManager();
+
     }
     
     /**
      * Parse manifest entry line
- * 
- * @param string $line Manifest entry line
- * @return array|false Parsed entry or false if invalid
- */
+    * 
+    * @param string $line Manifest entry line
+    * @return array|false Parsed entry or false if invalid
+    */
     public function parseManifestEntry(string $line) {
-    $parts = explode("\t", $line);
-    
+        $parts = explode("\t", $line);
+
         if (count($parts) < 2) {
-        return false;
-    }
-        
+            return false;
+        }
+
         // Check if this is a symlink entry
         if ($parts[1] === '[LINK]') {
             return $this->parseSymlinkEntry($line);
         }
-    
-    $entry = [
+
+        $entry = [
             'path' => $parts[0],
             'hash' => $parts[1]
-    ];
+        ];
 
-    $entry['metadata'] = [
+        $entry['metadata'] = [
             'permissions'   => $parts[2],
             'owner'         => $parts[3],
             'group'         => $parts[4],
@@ -47,7 +46,7 @@ class UtilityManager {
 
         return $entry;
     }
-    
+
     /**
      * Parse symlink manifest entry
      * 
@@ -56,27 +55,27 @@ class UtilityManager {
      */
     public function parseSymlinkEntry(string $line) {
         $parts = explode("\t", $line);
-        
+
         if (count($parts) < 4) {
             return false;
         }
-        
+
         return [
             'path'      => $parts[0],
             'hash'      => $parts[1],
             'target'    => $parts[2],
             'metadata'  => [
-        'permissions'   => $parts[3],
-        'owner'         => $parts[4],
-        'group'         => $parts[5],
-        'mtime'         => (int)$parts[6],
-        'atime'         => (int)$parts[7],
-        'ctime'         => (int)$parts[8],
-        'size'          => (int)$parts[9]
+                'permissions'   => $parts[3],
+                'owner'         => $parts[4],
+                'group'         => $parts[5],
+                'mtime'         => (int)$parts[6],
+                'atime'         => (int)$parts[7],
+                'ctime'         => (int)$parts[8],
+                'size'          => (int)$parts[9]
             ]
         ];
     }
-    
+
     /**
      * Get the next available commit ID
      * 
@@ -90,7 +89,7 @@ class UtilityManager {
         if (!file_exists($rarfile)) {
             return 1;
         }
-        
+
         $rar_cmd = 'rar lb';
 
         if ($password) {
@@ -101,9 +100,9 @@ class UtilityManager {
         
         // Add input redirection to prevent password prompts
         $rar_cmd .= ' </dev/null 2>/dev/null';
-        
+
         exec($rar_cmd, $lines, $code);
-        
+
         // If command failed for any reason, return 1 (new archive)
         if ($code !== 0) {
             return 1;
@@ -121,7 +120,7 @@ class UtilityManager {
 
         return $max + 1;
     }
-    
+
     /**
      * Format file size in human-readable format
      * 
